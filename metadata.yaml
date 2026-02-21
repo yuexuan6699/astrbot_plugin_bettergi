@@ -2,5 +2,5 @@ name: astrbot_plugin_bettergi
 display_name: BetterGI
 desc: BetterGI 远程控制插件，支持定时任务、手动触发、队列管理等功能
 version: v1.0.0
-author: 苏月晅 # 作者
+author: 苏月晅
 repo: https://github.com/yuexuan6699/astrbot_plugin_bettergi
