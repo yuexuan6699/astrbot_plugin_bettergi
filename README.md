@@ -1,7 +1,8 @@
 # BetterGI 远程控制插件
 
 AstrBot 插件，用于远程控制 BetterGI（更好的原神）。
-##
+
+## 应用项目
 - **[更好的原神](https://www.bettergi.com/)**
 - **[AastrBot](https://docs.astrbot.app/)**
 
