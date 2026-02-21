@@ -14,7 +14,7 @@
                 "items": {
                     "type": "string"
                 },
-                "default": ["--startOneDragon 自动每日"]
+                "default": []
             },
             "debug_log": {
                 "description": "调试日志开关，设置为true时会输出详细的调试信息",
@@ -53,7 +53,7 @@
                 "items": {
                     "type": "string"
                 },
-                "default": ["--startOneDragon 每日自动"]
+                "default": []
             }
         }
     },
@@ -95,6 +95,6 @@
     "help_text": {
         "description": "帮助文本",
         "type": "text",
-        "default": "BetterGI远程工具 使用帮助：\n\n1. 基础命令：\n   运行：\n   - better运行\n   - better run\n   - better启动\n   \n   状态查询：\n   - better状态\n   - better status\n   - better信息\n   - better info\n   \n   停止：\n   - better停止\n   - better stop\n   - better终止\n   - better结束\n   \n   帮助：\n   - better帮助\n   - better help\n   - better使用帮助\n\n2. 选择运行配置中的特定命令：\n   - better运行 select\n   - better运行 选择\n\n3. 队列管理功能：\n    使用队列前缀：\n     - better删除\n     - better rm\n     - better remove\n    查看队列：\n     - better删除 list\n     - better删除 列表\n   通过索引删除：\n     - better删除 [数字索引]\n   通过命令内容删除：\n    - better删除 [命令]\n\n4. 自定义命令：\n   - better运行 [命令名] [参数]\n   支持的命令类型：\n   - 一条龙命令：startOneDragon [配置名称]\n   - 调度器命令：--startGroups 任务1 任务2 ...\n   示例：\n   - 运行一条龙：startOneDragon\n   - 运行每日任务：--startGroups daily\n   - 运行每周任务：--startGroups weekly"
+        "default": "BetterGI远程工具 使用帮助：\n\n1. 基础命令：\n   运行：\n   - better运行\n   - better run\n   - better启动\n   \n   状态查询：\n   - better状态\n   - better status\n   - better信息\n   - better info\n   \n   停止：\n   - better停止\n   - better stop\n   - better终止\n   - better结束\n   \n   帮助：\n   - better帮助\n   - better help\n   - better使用帮助\n\n2. 选择运行配置中的特定命令：\n   - better运行 select\n   - better运行 选择\n\n3. 队列管理功能：\n    使用队列前缀：\n     - better删除\n     - better rm\n     - better remove\n    查看队列：\n     - better删除 list\n     - better删除 列表\n   通过索引删除：\n     - better删除 [数字索引]\n   通过命令内容删除：\n    - better删除 [命令]\n\n4. 自定义命令：\n   - better运行 [命令名] [参数]\n   支持的命令类型：\n   - 一条龙命令：startOneDragon [配置名称]\n   - 调度器命令：--startGroups [配置名称]"
     }
 }
