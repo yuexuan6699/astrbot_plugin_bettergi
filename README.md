@@ -101,6 +101,11 @@ better删除 1       # 删除队列中第1个命令
 - Pillow >= 9.0.0
 - psutil >= 5.9.0
 
+## 作者
+
+苏月晅
+[联系本作者](https://yuexuan6699.dpdns.org/contact.html)
+
 ## 许可证
 
 跟随那两个项目
