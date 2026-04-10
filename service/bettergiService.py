@@ -155,25 +155,24 @@ async def execute_command_isolated(
     command: Union[str, List[str]], 
     cwd: Optional[str] = None, 
     timeout: int = 18000
-) -> Dict[str, Any]:
+) -> asyncio.subprocess.Process:
     """
-    在隔离环境中执行命令。
+    在隔离环境中启动命令并返回进程对象。
     
     清除 PYTHONPATH 和 PYTHONHOME 环境变量，避免与宿主环境冲突。
-    同时启动日志监控任务，检测进程是否卡住。
+    调用方负责等待进程完成。
     
     Args:
         command: 要执行的命令
         cwd: 工作目录
-        timeout: 超时时间（秒），默认5小时
+        timeout: 此参数保留用于兼容，实际超时由调用方控制
         
     Returns:
-        执行结果字典
+        启动的异步进程对象
     """
     command_str = ' '.join(command) if isinstance(command, list) else command
-    cmd_str = command_str
     
-    logger.info(f"开始执行命令: {cmd_str}, 工作目录: {cwd}, 超时时间: {timeout}秒")
+    logger.info(f"开始执行命令: {command_str}, 工作目录: {cwd}")
     
     env = os.environ.copy()
     env.pop('PYTHONPATH', None)
@@ -181,58 +180,37 @@ async def execute_command_isolated(
     
     if cwd and not os.path.exists(cwd):
         logger.error(f"工作目录不存在: {cwd}")
-        return {
-            "success": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"工作目录不存在: {cwd}"
-        }
+        raise FileNotFoundError(f"工作目录不存在: {cwd}")
     
-    process = None
-    log_monitor_task = None
+    process = await _execute_with_debug_log(command, cwd, env)
+    running_processes[process.pid] = process
     
+    return process
+
+
+async def wait_process_and_collect_output(
+    process: asyncio.subprocess.Process,
+    command_str: str,
+    timeout: int = 18000
+) -> Dict[str, Any]:
+    """
+    等待进程完成并收集输出结果。
+    
+    Args:
+        process: 异步进程对象
+        command_str: 命令字符串（用于日志）
+        timeout: 超时时间（秒）
+        
+    Returns:
+        包含执行结果的字典
+    """
     try:
-        process = await _execute_with_debug_log(command, cwd, env)
-        
-        running_processes[process.pid] = process
-        
-        if cwd:
-            log_monitor_task = asyncio.create_task(_monitor_bettergi_log(cwd, process))
-        
-        result = await _execute_with_pipe_output(process, cmd_str, timeout)
-        return result
-            
-    except PermissionError as e:
-        logger.error(f"权限不足，无法执行命令: {cmd_str}")
-        return {
-            "success": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"权限不足: {str(e)}。请确保您有足够的权限执行此文件，或尝试以管理员身份运行程序。"
-        }
-    except Exception as e:
-        logger.exception(f"执行命令时发生未预期的错误: {cmd_str}")
-        error_msg = str(e)
-        if "系统找不到指定的文件" in error_msg and cwd:
-            files_in_dir = os.listdir(cwd) if os.path.exists(cwd) else []
-            exe_files = [f for f in files_in_dir if f.lower().startswith('bettergi')]
-            error_msg += f"。工作目录({cwd})中的BetterGI相关文件: {exe_files}"
-        return {
-            "success": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"执行命令时发生错误: {error_msg}"
-        }
+        result = await _execute_with_pipe_output(process, command_str, timeout)
     finally:
-        if process and process.pid in running_processes:
+        if process.pid in running_processes:
             del running_processes[process.pid]
-        
-        if log_monitor_task and not log_monitor_task.done():
-            log_monitor_task.cancel()
-            try:
-                await log_monitor_task
-            except asyncio.CancelledError:
-                pass
+    
+    return result
 
 
 async def _monitor_bettergi_log(cwd: str, process: asyncio.subprocess.Process) -> None:
@@ -523,6 +501,8 @@ class BettergiService:
         执行单个 BetterGI 命令。
         
         包括进程检测、可执行文件查找、命令构建、执行和结果监控。
+        进程启动后，并行执行进程等待和日志/进程状态监控，
+        确保在进程运行期间就能检测任务完成状态。
         
         Args:
             bettergi_dir: BetterGI 安装目录
@@ -532,6 +512,9 @@ class BettergiService:
         Returns:
             True 如果命令执行成功，否则 False
         """
+        process = None
+        log_monitor_task = None
+        
         try:
             self.logger.debug(f"[BetterGI] 开始执行单个命令: {command}")
             
@@ -602,33 +585,92 @@ class BettergiService:
             timeout = base_config.get("command_timeout", 3600)
             self.logger.info(f"[BetterGI] 使用命令超时设置: {timeout}秒")
             
-            result = await execute_command_isolated(cmd_args, cwd=bettergi_dir, timeout=timeout)
+            # 启动进程
+            try:
+                process = await execute_command_isolated(cmd_args, cwd=bettergi_dir, timeout=timeout)
+            except PermissionError as e:
+                self.logger.error(f"[BetterGI] 权限不足，无法执行命令: {e}")
+                return False
+            except FileNotFoundError as e:
+                self.logger.error(f"[BetterGI] {e}")
+                return False
+            except Exception as e:
+                self.logger.error(f"[BetterGI] 启动进程失败: {e}")
+                return False
             
-            if result["success"]:
-                completion_result = await self._wait_for_command_completion(bettergi_dir, command)
-                if not completion_result:
-                    result["success"] = False
-                    self.logger.warning(f"[BetterGI] 命令执行返回成功，但任务完成检测失败: {command}")
-                else:
-                    self.logger.info(f"[BetterGI] 命令执行成功且任务已完成: {full_command_str}")
+            # 启动日志监控任务（在进程运行期间并行监控）
+            log_monitor_task = asyncio.create_task(_monitor_bettergi_log(bettergi_dir, process))
             
-            if result["success"]:
-                if result["stdout"]:
-                    self.logger.debug(f"[BetterGI] 命令输出:\n{result['stdout'][:500]}{'...' if len(result['stdout']) > 500 else ''}")
+            # 并行等待：进程完成 + 任务完成监控
+            self.logger.info(f"[BetterGI] 进程已启动 (PID: {process.pid})，开始并行监控进程和日志")
+            
+            process_wait_task = asyncio.create_task(
+                wait_process_and_collect_output(process, full_command_str, timeout)
+            )
+            completion_monitor_task = asyncio.create_task(
+                self._wait_for_command_completion(bettergi_dir, command)
+            )
+            
+            # 等待进程执行完成
+            try:
+                result = await process_wait_task
+            except Exception as e:
+                self.logger.error(f"[BetterGI] 等待进程完成时出错: {e}")
+                result = {
+                    "success": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(e)
+                }
+            
+            # 等待任务完成监控（给予额外时间让监控器完成检测）
+            try:
+                completion_result = await asyncio.wait_for(completion_monitor_task, timeout=30)
+            except asyncio.TimeoutError:
+                self.logger.warning(f"[BetterGI] 任务完成监控超时，使用进程返回码判断")
+                completion_result = result["success"]
+            except Exception as e:
+                self.logger.error(f"[BetterGI] 任务完成监控异常: {e}")
+                completion_result = result["success"]
+            
+            # 取消日志监控任务
+            if log_monitor_task and not log_monitor_task.done():
+                log_monitor_task.cancel()
+                try:
+                    await log_monitor_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # 综合判断结果
+            success = result["success"] and completion_result
+            
+            if success:
+                self.logger.info(f"[BetterGI] 命令执行成功且任务已完成: {full_command_str}")
             else:
-                self.logger.error(f"[BetterGI] 命令执行失败: {full_command_str}, 返回码: {result['returncode']}")
-                error_msg = ""
-                if result["stderr"]:
-                    error_msg += f"错误信息: {result['stderr'][:500]}{'...' if len(result['stderr']) > 500 else ''} "
-                if result["stdout"]:
-                    error_msg += f"标准输出: {result['stdout'][:500]}{'...' if len(result['stdout']) > 500 else ''}"
-                self.logger.error(f"[BetterGI] 执行详情: {error_msg}")
+                if not result["success"]:
+                    self.logger.error(f"[BetterGI] 命令执行失败: {full_command_str}, 返回码: {result['returncode']}")
+                    error_msg = ""
+                    if result["stderr"]:
+                        error_msg += f"错误信息: {result['stderr'][:500]}{'...' if len(result['stderr']) > 500 else ''} "
+                    if result["stdout"]:
+                        error_msg += f"标准输出: {result['stdout'][:500]}{'...' if len(result['stdout']) > 500 else ''}"
+                    self.logger.error(f"[BetterGI] 执行详情: {error_msg}")
+                else:
+                    self.logger.warning(f"[BetterGI] 命令执行返回成功，但任务完成检测失败: {command}")
             
-            self.logger.debug(f"[BetterGI] 单个命令执行完成: {command}, 结果: {result['success']}")
-            return result["success"]
+            self.logger.debug(f"[BetterGI] 单个命令执行完成: {command}, 结果: {success}")
+            return success
             
         except asyncio.CancelledError:
             self.logger.info(f"[BetterGI] 命令执行任务被取消: {command}")
+            # 取消所有子任务
+            if log_monitor_task and not log_monitor_task.done():
+                log_monitor_task.cancel()
+            if process and process.returncode is None:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
             return False
             
         except Exception as e:
@@ -672,6 +714,7 @@ class BettergiService:
         定时任务运行器。
         
         根据配置的时间每天执行一次任务。
+        即使某次任务执行失败，定时器也会继续运行，不会中断。
         
         Args:
             context: 上下文对象
@@ -688,34 +731,41 @@ class BettergiService:
             
             self.logger.info(f"[BetterGI-定时任务] 计划运行时间: {run_time}, 执行命令: {task_command}")
             
-            run_count = 0
             last_run_date = None
             
             while self.task_running:
-                now = datetime.now()
-                scheduled_time = datetime.strptime(run_time, "%H:%M").replace(
-                    year=now.year, month=now.month, day=now.day
-                )
-                
-                current_date = now.date()
-                if last_run_date != current_date:
-                    self.logger.debug(f"[BetterGI-定时任务] 检测到日期变更，从 {last_run_date} 变更为 {current_date}，重置运行计数器")
-                    run_count = 0
-                    last_run_date = current_date
-                
-                if now >= scheduled_time and run_count == 0:
-                    self.logger.info("[BetterGI-定时任务] 开始执行")
+                try:
+                    now = datetime.now()
+                    scheduled_time = datetime.strptime(run_time, "%H:%M").replace(
+                        year=now.year, month=now.month, day=now.day
+                    )
                     
-                    result = await self.run_bettergi(context, config, task_command)
+                    current_date = now.date()
                     
-                    if result:
-                        self.logger.info("[BetterGI-定时任务] 执行成功")
-                    else:
-                        self.logger.error("[BetterGI-定时任务] 执行失败")
+                    # 检测到新的一天，且当天尚未执行过任务
+                    if last_run_date != current_date and now >= scheduled_time:
+                        self.logger.info(f"[BetterGI-定时任务] 开始执行 (日期: {current_date}, 计划时间: {run_time})")
+                        
+                        try:
+                            result = await self.run_bettergi(context, config, task_command)
+                            
+                            if result:
+                                self.logger.info("[BetterGI-定时任务] 执行成功")
+                            else:
+                                self.logger.error("[BetterGI-定时任务] 执行失败")
+                        except Exception as run_err:
+                            self.logger.error(f"[BetterGI-定时任务] 执行过程中发生异常: {run_err}", exc_info=True)
+                        
+                        last_run_date = current_date
                     
-                    run_count += 1
-                
-                await asyncio.sleep(600)
+                    await asyncio.sleep(60)
+                    
+                except asyncio.CancelledError:
+                    self.logger.info("[BetterGI-定时任务] 已被取消")
+                    raise
+                except Exception as loop_err:
+                    self.logger.error(f"[BetterGI-定时任务] 循环中发生异常（定时器继续运行）: {loop_err}", exc_info=True)
+                    await asyncio.sleep(60)
                 
         except asyncio.CancelledError:
             self.logger.info("[BetterGI-定时任务] 已被取消")
@@ -723,7 +773,7 @@ class BettergiService:
             if current_task and hasattr(self, 'active_tasks') and current_task in self.active_tasks:
                 self.active_tasks.remove(current_task)
         except Exception as e:
-            self.logger.exception("[BetterGI-定时任务] 执行过程中发生异常")
+            self.logger.exception("[BetterGI-定时任务] 执行过程中发生未预期的异常")
         finally:
             self.task_running = False
             self.logger.info("[BetterGI-定时任务] 已停止")
@@ -891,9 +941,10 @@ class BettergiService:
         command: str
     ) -> bool:
         """
-        等待命令执行完成。
+        在进程运行期间监控任务完成状态。
         
-        通过监控日志文件和进程状态来判断任务是否完成。
+        通过监控日志文件中的结束模式和进程状态来判断任务是否完成。
+        此方法与进程执行并行运行，能够在进程运行期间就检测到任务完成。
         
         Args:
             bettergi_dir: BetterGI 安装目录
@@ -913,7 +964,7 @@ class BettergiService:
             
             log_files = glob.glob(log_file_pattern)
             if not log_files:
-                self.logger.warning(f"[BetterGI-监控] 未找到日志文件: {log_file_pattern}")
+                self.logger.warning(f"[BetterGI-监控] 未找到日志文件: {log_file_pattern}，将仅通过进程状态判断")
                 return await self._wait_for_process_completion(command)
             
             latest_log_file = max(log_files, key=os.path.getctime)
@@ -922,6 +973,7 @@ class BettergiService:
             last_position = os.path.getsize(latest_log_file) if os.path.exists(latest_log_file) else 0
             start_time = time.time()
             last_log_time = start_time
+            task_completed = False
             
             task_end_patterns = [
                 r"任务执行完成",
@@ -951,13 +1003,7 @@ class BettergiService:
             while time.time() - start_time < timeout:
                 current_time = time.time()
                 
-                bettergi_processes = self._find_bettergi_processes()
-                game_processes = self._find_game_processes()
-                
-                if not bettergi_processes and not game_processes:
-                    self.logger.info(f"[BetterGI-监控] 所有BetterGI进程和游戏进程已结束，命令 {command} 执行完成")
-                    return True
-                
+                # 检查日志文件是否存在
                 if not os.path.exists(latest_log_file):
                     self.logger.warning(f"[BetterGI-监控] 日志文件 {latest_log_file} 已不存在，检查新的日志文件")
                     log_files = glob.glob(log_file_pattern)
@@ -967,32 +1013,77 @@ class BettergiService:
                         last_log_time = current_time
                     continue
                 
+                # 读取日志新内容
                 current_size = os.path.getsize(latest_log_file)
+                new_content = ""
+                
                 if current_size > last_position:
-                    last_log_time = current_time
-                elif (current_time - last_log_time) > 300:
+                    try:
+                        with open(latest_log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            f.seek(last_position)
+                            new_content = f.read()
+                            last_position = f.tell()
+                            last_log_time = current_time
+                    except Exception as e:
+                        self.logger.error(f"[BetterGI-监控] 读取日志文件时发生错误: {e}")
+                
+                # 检查是否检测到任务结束模式
+                if new_content:
+                    for pattern in task_end_patterns:
+                        if re.search(pattern, new_content, re.IGNORECASE):
+                            self.logger.info(f"[BetterGI-监控] 检测到任务结束模式: '{pattern}'，命令 {command} 执行完成")
+                            task_completed = True
+                            break
+                
+                if task_completed:
+                    break
+                
+                # 检查进程是否已结束（作为辅助判断）
+                bettergi_processes = self._find_bettergi_processes()
+                game_processes = self._find_game_processes()
+                
+                if not bettergi_processes and not game_processes:
+                    # 进程已结束且未检测到结束模式，等待一小段时间确认
+                    self.logger.info(f"[BetterGI-监控] 所有进程已结束，等待确认最终状态...")
+                    await asyncio.sleep(3)
+                    
+                    # 再次检查是否有新日志内容
+                    if os.path.exists(latest_log_file):
+                        final_size = os.path.getsize(latest_log_file)
+                        if final_size > last_position:
+                            try:
+                                with open(latest_log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                                    f.seek(last_position)
+                                    final_content = f.read()
+                                    for pattern in task_end_patterns:
+                                        if re.search(pattern, final_content, re.IGNORECASE):
+                                            self.logger.info(f"[BetterGI-监控] 进程结束后在最终日志中检测到结束模式: '{pattern}'")
+                                            task_completed = True
+                                            break
+                            except Exception:
+                                pass
+                    
+                    if task_completed:
+                        break
+                    
+                    # 进程已结束，没有检测到结束模式，但也没有卡住，认为正常完成
+                    self.logger.info(f"[BetterGI-监控] 进程已正常结束，命令 {command} 完成")
+                    task_completed = True
+                    break
+                
+                # 检查日志是否长时间无更新（可能卡住）
+                if (current_time - last_log_time) > 300:
                     self.logger.warning(f"[BetterGI-监控] 日志文件已超过5分钟无更新，命令 {command} 可能已卡住")
                     self._terminate_game_processes()
                     return False
                 
-                try:
-                    with open(latest_log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        f.seek(last_position)
-                        new_content = f.read()
-                        last_position = f.tell()
-                        
-                        if new_content:
-                            for pattern in task_end_patterns:
-                                if re.search(pattern, new_content, re.IGNORECASE):
-                                    self.logger.info(f"[BetterGI-监控] 检测到任务结束模式: '{pattern}'，命令 {command} 执行完成")
-                                    return True
-                except Exception as e:
-                    self.logger.error(f"[BetterGI-监控] 读取日志文件时发生错误: {e}")
-                
                 await asyncio.sleep(5)
             
-            self.logger.warning(f"[BetterGI-监控] 命令 {command} 执行超时 ({timeout}秒)")
-            return False
+            if not task_completed and (time.time() - start_time) >= timeout:
+                self.logger.warning(f"[BetterGI-监控] 命令 {command} 执行超时 ({timeout}秒)")
+                return False
+            
+            return task_completed
             
         except asyncio.CancelledError:
             self.logger.info(f"[BetterGI-监控] 命令执行任务被取消: {command}")
