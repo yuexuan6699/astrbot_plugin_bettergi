@@ -399,15 +399,54 @@ class BetterGIPlugin(Star):
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
             from pathlib import Path
+            import win32gui
+            import win32ui
+            import win32con
+            import win32api
+            from PIL import Image
+            
             save_dir = Path(get_astrbot_data_path()) / "plugin_data" / "bettergi" / "screenshots"
             save_dir.mkdir(parents=True, exist_ok=True)
             
-            image = ImageGrab.grab()
+            try:
+                hwnd = win32gui.GetDesktopWindow()
+                hwnd_dc = win32gui.GetWindowDC(hwnd)
+                mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+                save_dc = mfc_dc.CreateCompatibleDC()
+                
+                width = win32api.GetSystemMetrics(0)
+                height = win32api.GetSystemMetrics(1)
+                
+                bitmap = win32ui.CreateBitmap()
+                bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
+                
+                save_dc.SelectObject(bitmap)
+                save_dc.BitBlt((0, 0), (width, height), mfc_dc, (0, 0), win32con.SRCCOPY)
+                
+                bmpinfo = bitmap.GetInfo()
+                bmpstr = bitmap.GetBitmapBits(True)
+                
+                image = Image.frombuffer('RGB', (bmpinfo['bmWidth'], bmpinfo['bmHeight']), 
+                                        bmpstr, 'raw', 'BGRX', 0, 1)
+                
+                win32gui.DeleteObject(bitmap.GetHandle())
+                save_dc.DeleteDC()
+                mfc_dc.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwnd_dc)
+                
+                logger.info(f"[BetterGI] Windows API 截图成功，分辨率：{width}x{height}")
+                
+            except Exception as win32_err:
+                logger.warning(f"Windows API 截图失败，使用 ImageGrab: {win32_err}")
+                image = ImageGrab.grab()
+            
             save_path = save_dir / f"status_{int(time.time())}.png"
             image.save(save_path)
+            logger.info(f"[BetterGI] 截图已保存：{save_path}")
             return str(save_path)
+            
         except Exception as e:
-            logger.error(f"[BetterGI] 截图失败: {e}")
+            logger.error(f"[BetterGI] 截图失败：{e}", exc_info=True)
             return ""
     
     def _build_status_message(self, status_info: Dict[str, Any], base_config: Dict[str, Any], 
