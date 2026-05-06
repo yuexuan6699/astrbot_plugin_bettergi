@@ -352,8 +352,14 @@ class BetterGIPlugin(Star):
             
             from astrbot.api.message_components import Image, Plain
             
+            platform_name = event.get_platform_name()
+            
             if picture_path and os.path.exists(picture_path):
-                await _send_with_recall(self, event, MessageChain([Plain(message), Image(file=picture_path)]))
+                if platform_name == "aiocqhttp":
+                    await _send_with_recall(self, event, MessageChain([Plain(message), Image(file=picture_path)]))
+                else:
+                    await _send_with_recall(self, event, MessageChain().message(message))
+                    await _send_with_recall(self, event, MessageChain([Image(file=picture_path)]))
             else:
                 await _send_with_recall(self, event, MessageChain().message(message))
                 
