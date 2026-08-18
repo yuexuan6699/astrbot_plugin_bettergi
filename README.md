@@ -1,4 +1,4 @@
-# BetterGI 远程控制插件
+# BetterGI 远程控制插件（旧版本已不再使用）
 
 AstrBot 插件，用于远程控制 BetterGI（更好的原神）。
 
