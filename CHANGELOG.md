@@ -1,4 +1,9 @@
 
+2.0.1: 修复热重载问题 26.08.18
+
+- 修复热重载后 Webhook 服务器不启动（on_astrbot_loaded 改为 initialize）
+- 默认 Webhook 路径从 /bettergi/webhook 改为 /bettergi
+
 2.0.0: 完全重写插件 26.08.18
 
 - 新增 Webhook 事件接收与转发（aiohttp HTTP 服务器）
