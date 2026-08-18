@@ -15,7 +15,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.4")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.5")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -352,7 +352,10 @@ class BetterGIPlugin(Star):
         logger.info(f"[BetterGI] Webhook 事件: {event_type} | {result} | {message}")
 
         if self._notify_umo and self._should_notify(event_type):
-            await self._send_notify(event_type, result, message, timestamp)
+            screenshot = event_data.get("screenshot", "")
+            await self._send_notify(
+                event_type, result, message, timestamp, screenshot
+            )
 
     def _should_notify(self, event_type: str) -> bool:
         events_cfg = self.config.get("notify", {}).get("events", {})
@@ -362,7 +365,12 @@ class BetterGIPlugin(Star):
         return events_cfg.get(config_key, False)
 
     async def _send_notify(
-        self, event_type: str, result: str, message: str, timestamp: str
+        self,
+        event_type: str,
+        result: str,
+        message: str,
+        timestamp: str,
+        screenshot: str = "",
     ) -> None:
         """发送事件通知到所有绑定的会话。"""
         text = (
@@ -374,9 +382,11 @@ class BetterGIPlugin(Star):
         if message:
             text += f"消息: {message}"
 
-        chain = MessageChain().message(text)
         for umo in self._notify_umo:
             try:
+                chain = MessageChain().message(text)
+                if screenshot:
+                    chain = chain.base64_image(screenshot)
                 await self.context.send_message(umo, chain)
             except Exception as e:
                 logger.error(f"[BetterGI] 发送通知到 {umo} 失败: {e}")

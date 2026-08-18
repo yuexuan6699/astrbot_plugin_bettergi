@@ -1,4 +1,9 @@
 
+2.0.5: 转发截图 26.08.18
+
+- Webhook 事件通知支持转发 BetterGI 截图
+- 使用 base64_image 发送 base64 编码的 JPEG 图片
+
 2.0.4: 修复命令不执行 26.08.18
 
 - 修复 yield 后代码不执行导致 BetterGI 不启动
