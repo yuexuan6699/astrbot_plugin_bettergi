@@ -15,7 +15,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.2")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.3")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -142,7 +142,7 @@ class BetterGIPlugin(Star):
 
         logger.info("[BetterGI] 插件已加载")
 
-    @filter.event_message_type(filter.EventMessageType.ALL)
+    @filter.regex('.*', priority=1)
     async def on_message(self, event: AstrMessageEvent):
         """监听所有消息，手动解析自定义命令。"""
         if not self._check_permission(event):

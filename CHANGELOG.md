@@ -1,4 +1,9 @@
 
+2.0.3: 改用 regex 过滤器 26.08.18
+
+- 消息监听从 event_message_type 改为 @filter.regex，priority=1
+- 不受 wake_prefix 约束，消息到达更可靠
+
 2.0.2: 多别名+多会话通知 26.08.18
 
 - 命令名称支持多个别名（如 运行/run/启动 均可触发）
