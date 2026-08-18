@@ -1,100 +1,348 @@
 {
-    "base": {
-        "description": "基础配置",
-        "type": "object",
-        "items": {
-            "bettergi_dir": {
-                "description": "BetterGI 安装目录",
-                "type": "string",
-                "default": ""
-            },
-            "default_command": {
-                "description": "默认命令，当不指定命令时使用",
-                "type": "list",
+    "mode": {
+        "description": "运行模式",
+        "type": "string",
+        "options": ["local", "remote"],
+        "default": "local",
+        "hint": "local: BetterGI 与 AstrBot 在同一设备，直接执行命令; remote: BetterGI 在另一设备，通过网络远程控制"
+    },
+    "bettergi_dir": {
+        "description": "BetterGI 安装目录",
+        "type": "string",
+        "default": "",
+        "hint": "BetterGI.exe 所在目录的完整路径，例如 D:\\BetterGI。本地模式必填"
+    },
+    "commands": {
+        "description": "命令配置列表",
+        "type": "template_list",
+        "hint": "添加一条龙或调度器命令，只需填写配置名称，插件会自动组装命令",
+        "templates": {
+            "dragon": {
+                "name": "一条龙",
+                "hint": "执行 BetterGI 一条龙功能",
+                "display_item": "config_name",
                 "items": {
-                    "type": "string"
-                },
-                "default": []
+                    "config_name": {
+                        "description": "一条龙配置名称",
+                        "type": "string",
+                        "hint": "BetterGI 一条龙页面中的配置名称，留空则使用页面选定的配置"
+                    }
+                }
             },
-            "debug_log": {
-                "description": "调试日志开关，设置为true时会输出详细的调试信息",
+            "group": {
+                "name": "调度器配置组",
+                "hint": "执行 BetterGI 全自动调度器中的配置组",
+                "display_item": "config_name",
+                "items": {
+                    "config_name": {
+                        "description": "配置组名称",
+                        "type": "string",
+                        "hint": "BetterGI 调度器中的配置组名称，多个配置组用空格分隔"
+                    }
+                }
+            }
+        }
+    },
+    "command_names": {
+        "description": "命令名称自定义",
+        "type": "object",
+        "hint": "自定义每个命令的触发词，发送时以此开头",
+        "items": {
+            "prefix": {
+                "description": "命令前缀",
+                "type": "string",
+                "default": "better",
+                "hint": "所有命令的前缀，例如 better运行、better状态"
+            },
+            "run": {
+                "description": "运行命令",
+                "type": "string",
+                "default": "运行",
+                "hint": "触发运行的命令名称，如 运行、run、启动"
+            },
+            "status": {
+                "description": "状态命令",
+                "type": "string",
+                "default": "状态",
+                "hint": "触发状态查询的命令名称"
+            },
+            "stop": {
+                "description": "停止命令",
+                "type": "string",
+                "default": "停止",
+                "hint": "触发停止的命令名称"
+            },
+            "log": {
+                "description": "日志命令",
+                "type": "string",
+                "default": "日志",
+                "hint": "触发日志查询的命令名称"
+            },
+            "bind": {
+                "description": "绑定命令",
+                "type": "string",
+                "default": "绑定",
+                "hint": "触发会话绑定的命令名称"
+            },
+            "help": {
+                "description": "帮助命令",
+                "type": "string",
+                "default": "帮助",
+                "hint": "触发帮助信息的命令名称"
+            }
+        }
+    },
+    "webhook": {
+        "description": "Webhook 配置",
+        "type": "object",
+        "hint": "接收 BetterGI 事件通知，用于任务完成检测和日志转发",
+        "items": {
+            "enable": {
+                "description": "启用 Webhook 接收",
                 "type": "bool",
-                "default": false
+                "default": true,
+                "hint": "启用后插件将启动 HTTP 服务器接收 BetterGI 的事件推送"
             },
-            "toggle_audio_service": {
-                "description": "运行时禁用声音开关，设置为true时会禁用 BetterGI 中的声音功能",
-                "type": "bool",
-                "default": false
+            "host": {
+                "description": "监听地址",
+                "type": "string",
+                "default": "0.0.0.0",
+                "hint": "HTTP 服务器监听地址，0.0.0.0 表示所有网络接口"
             },
-            "command_timeout": {
-                "description": "命令执行超时时间（秒），默认3600秒（1小时），可根据需要调整",
+            "port": {
+                "description": "监听端口",
                 "type": "int",
-                "default": 3600
+                "default": 8088,
+                "hint": "HTTP 服务器监听端口，确保端口未被占用"
+            },
+            "path": {
+                "description": "Webhook 路径",
+                "type": "string",
+                "default": "/bettergi/webhook",
+                "hint": "BetterGI 中填写的 Webhook 地址路径，完整地址为 http://<IP>:<端口><路径>"
+            },
+            "token": {
+                "description": "验证令牌",
+                "type": "string",
+                "default": "",
+                "hint": "可选的验证令牌，BetterGI 和插件需填写一致的值"
+            }
+        }
+    },
+    "notify": {
+        "description": "通知配置",
+        "type": "object",
+        "hint": "Webhook 事件自动转发到的聊天会话",
+        "items": {
+            "umo": {
+                "description": "通知接收会话ID",
+                "type": "string",
+                "default": "",
+                "hint": "通过发送绑定命令自动设置，或手动填写 unified_msg_origin"
+            },
+            "events": {
+                "description": "需要通知的事件类型",
+                "type": "object",
+                "hint": "勾选要转发到聊天会话的 BetterGI 事件类型",
+                "items": {
+                    "notify_test": {
+                        "description": "测试通知 (notify.test)",
+                        "type": "bool",
+                        "default": false,
+                        "hint": "BetterGI 发送测试通知时转发，用于验证 Webhook 是否连通"
+                    },
+                    "dragon_start": {
+                        "description": "一条龙启动 (dragon.start)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "BetterGI 一条龙功能开始执行时转发"
+                    },
+                    "dragon_end": {
+                        "description": "一条龙结束 (dragon.end)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "BetterGI 一条龙功能执行完成时转发，含执行结果"
+                    },
+                    "group_start": {
+                        "description": "配置组启动 (group.start)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "调度器配置组开始执行时转发"
+                    },
+                    "group_end": {
+                        "description": "配置组结束 (group.end)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "调度器配置组执行完成时转发，含执行结果"
+                    },
+                    "task_cancel": {
+                        "description": "任务取消 (task.cancel)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "任务被手动取消时转发"
+                    },
+                    "task_error": {
+                        "description": "任务错误 (task.error)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "任务执行出错时转发，含错误信息"
+                    },
+                    "domain_start": {
+                        "description": "自动秘境启动 (domain.start)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动秘境功能开始执行时转发"
+                    },
+                    "domain_end": {
+                        "description": "自动秘境结束 (domain.end)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动秘境执行完成时转发，含执行结果"
+                    },
+                    "domain_reward": {
+                        "description": "自动秘境奖励 (domain.reward)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动秘境获得奖励时转发"
+                    },
+                    "domain_retry": {
+                        "description": "自动秘境重试 (domain.retry)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动秘境重试时转发"
+                    },
+                    "tcg_start": {
+                        "description": "七圣召唤启动 (tcg.start)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "七圣召唤自动对战开始时转发"
+                    },
+                    "tcg_end": {
+                        "description": "七圣召唤结束 (tcg.end)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "七圣召唤自动对战结束时转发，含执行结果"
+                    },
+                    "album_start": {
+                        "description": "自动音游启动 (album.start)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动音游专辑开始时转发"
+                    },
+                    "album_end": {
+                        "description": "自动音游结束 (album.end)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动音游专辑结束时转发，含执行结果"
+                    },
+                    "album_error": {
+                        "description": "自动音游错误 (album.error)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动音游专辑出错时转发，含错误信息"
+                    },
+                    "daily_reward": {
+                        "description": "每日奖励状态 (daily.reward)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "检查每日奖励领取状态时转发"
+                    },
+                    "autoeat_start": {
+                        "description": "自动吃药启动 (autoeat.start)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动吃药功能开始时转发"
+                    },
+                    "autoeat_end": {
+                        "description": "自动吃药结束 (autoeat.end)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动吃药功能结束时转发"
+                    },
+                    "autoeat_info": {
+                        "description": "自动吃药信息 (autoeat.info)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "自动吃药信息提示时转发"
+                    },
+                    "js_custom": {
+                        "description": "JS自定义事件 (js.custom)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "JavaScript 脚本发送自定义通知时转发"
+                    },
+                    "js_error": {
+                        "description": "JS运行时错误 (js.error)",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "JavaScript 脚本运行出错时转发，含错误信息"
+                    }
+                }
+            }
+        }
+    },
+    "remote": {
+        "description": "远程模式配置",
+        "type": "object",
+        "hint": "分离式模式下连接辅助程序的配置",
+        "items": {
+            "url": {
+                "description": "辅助程序地址",
+                "type": "string",
+                "default": "http://127.0.0.1:9099",
+                "hint": "运行在 BetterGI 所在电脑上的辅助程序地址"
+            },
+            "token": {
+                "description": "认证令牌",
+                "type": "string",
+                "default": "",
+                "hint": "需与辅助程序中配置的令牌保持一致"
             }
         }
     },
     "scheduled_task": {
-        "description": "定时任务配置",
+        "description": "定时任务",
         "type": "object",
+        "hint": "每天在指定时间自动执行命令",
         "items": {
             "enable": {
-                "description": "是否启用定时任务",
+                "description": "启用定时任务",
                 "type": "bool",
                 "default": false
             },
             "run_time": {
-                "description": "定时运行时间（格式：HH:MM）",
+                "description": "执行时间",
                 "type": "string",
-                "default": "00:00"
+                "default": "04:00",
+                "hint": "格式 HH:MM，24小时制"
             },
-            "command": {
-                "description": "定时任务执行的命令",
-                "type": "list",
-                "items": {
-                    "type": "string"
-                },
-                "default": []
+            "command_index": {
+                "description": "执行的命令序号",
+                "type": "int",
+                "default": 1,
+                "hint": "命令配置列表中的序号，从1开始"
             }
         }
     },
-    "manual_trigger": {
-        "description": "手动触发配置",
-        "type": "object",
-        "items": {
-            "enable": {
-                "description": "是否启用手动触发",
-                "type": "bool",
-                "default": true
-            },
-            "command": {
-                "description": "手动触发的命令列表",
-                "type": "list",
-                "items": {
-                    "type": "string"
-                },
-                "default": [
-                    "--startOneDragon 每日自动",
-                    "--startGroups 伐木"
-                ]
-            }
-        }
-    },
-    "bettergi_recall_delay": {
-        "description": "BetterGI 消息撤回延迟时间（秒），默认90秒，设为 0 或负数则禁用撤回功能",
+    "command_timeout": {
+        "description": "命令执行超时时间（秒）",
         "type": "int",
-        "default": 90
+        "default": 1800,
+        "hint": "单个命令的最大执行时间，默认30分钟"
+    },
+    "debug_log": {
+        "description": "调试日志",
+        "type": "bool",
+        "default": false,
+        "hint": "启用后输出详细的调试信息"
     },
     "better_master": {
-        "description": "有权限使用插件的用户ID列表",
+        "description": "额外授权用户ID列表",
         "type": "list",
         "items": {
             "type": "string"
         },
-        "default": []
-    },
-    "help_text": {
-        "description": "帮助文本",
-        "type": "text",
-        "default": "BetterGI远程工具 使用帮助：\n\n1. 基础命令：\n   运行：\n   - better运行\n   - better run\n   - better启动\n   \n   状态查询：\n   - better状态\n   - better status\n   - better信息\n   - better info\n   \n   停止：\n   - better停止\n   - better stop\n   - better终止\n   - better结束\n   \n   帮助：\n   - better帮助\n   - better help\n   - better使用帮助\n\n2. 选择运行配置中的特定命令：\n   - better运行 select\n   - better运行 选择\n\n3. 队列管理功能：\n    使用队列前缀：\n     - better删除\n     - better rm\n     - better remove\n    查看队列：\n     - better删除 list\n     - better删除 列表\n   通过索引删除：\n     - better删除 [数字索引]\n   通过命令内容删除：\n    - better删除 [命令]\n\n4. 自定义命令：\n   - better运行 [命令名] [参数]\n   支持的命令类型：\n   - 一条龙命令：startOneDragon [配置名称]\n   - 调度器命令：--startGroups [配置名称]"
+        "default": [],
+        "hint": "AstrBot 管理员（admins_id）自动拥有权限，此处添加额外授权的用户ID。为空则仅管理员可用"
     }
 }

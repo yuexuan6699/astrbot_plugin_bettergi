@@ -1,481 +1,385 @@
 import os
-import sys
-import asyncio
-import time
-from asyncio import sleep
-from typing import Optional, List, Dict, Any, Tuple
-from PIL import ImageGrab
+from typing import Any
 
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger, AstrBotConfig
 from astrbot.core.message.message_event_result import MessageChain
 
-from .service.bettergiService import bettergi_service, running_processes, BettergiService
+from .service import (
+    EventStore,
+    Scheduler,
+    WebhookServer,
+    build_command,
+    create_runner,
+)
 
 
-
-async def _send_with_recall(self, event: AstrMessageEvent, message_chain: MessageChain) -> None:
-    try:
-        from .service.recall import recall_send
-        delay = self.config.get("bettergi_recall_delay", 60)
-        logger.debug(f"[recall] 发送消息，撤回延迟: {delay}秒")
-        await recall_send(delay, event, message_chain)
-    except Exception as e:
-        logger.error(f"[recall] 发送消息失败: {e}")
-        await event.send(message_chain)
-
-
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "1.0.0")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.0")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.bettergi_config = self._get_bettergi_config()
-        self.bettergi_user_state = {}
-        
-        self._initialize_plugin()
-    
-    def _get_bettergi_config(self) -> Dict[str, Any]:
-        config = self.config
-        if not config:
-            return {
-                "base": {},
-                "scheduled_task": {},
-                "manual_trigger": {},
-                "better_master": [],
-                "help_text": "帮助信息未配置"
-            }
-        
-        return {
-            "base": config.get("base", {}),
-            "scheduled_task": config.get("scheduled_task", {}),
-            "manual_trigger": config.get("manual_trigger", {}),
-            "better_master": config.get("better_master", []),
-            "help_text": config.get("help_text", "帮助信息未配置")
+        self._init_config()
+
+        self._event_store = EventStore(self._get_data_dir())
+        self._runner = create_runner(config)
+        self._scheduler = Scheduler()
+
+        webhook_cfg = config.get("webhook", {})
+        self._webhook_server = WebhookServer(
+            host=webhook_cfg.get("host", "0.0.0.0"),
+            port=webhook_cfg.get("port", 8088),
+            path=webhook_cfg.get("path", "/bettergi/webhook"),
+            token=webhook_cfg.get("token", ""),
+        )
+        self._webhook_server.set_handler(self._on_webhook_event)
+
+        self._notify_umo: str = config.get("notify", {}).get("umo", "")
+        self._event_map: dict[str, str] = {
+            "notify.test": "notify_test",
+            "dragon.start": "dragon_start",
+            "dragon.end": "dragon_end",
+            "group.start": "group_start",
+            "group.end": "group_end",
+            "task.cancel": "task_cancel",
+            "task.error": "task_error",
+            "domain.start": "domain_start",
+            "domain.end": "domain_end",
+            "domain.reward": "domain_reward",
+            "domain.retry": "domain_retry",
+            "tcg.start": "tcg_start",
+            "tcg.end": "tcg_end",
+            "album.start": "album_start",
+            "album.end": "album_end",
+            "album.error": "album_error",
+            "daily.reward": "daily_reward",
+            "autoeat.start": "autoeat_start",
+            "autoeat.end": "autoeat_end",
+            "autoeat.info": "autoeat_info",
+            "js.custom": "js_custom",
+            "js.error": "js_error",
         }
-    
-    def _initialize_plugin(self) -> None:
-        try:
-            self._cleanup_screenshots()
-            
-            bettergi_config = self.bettergi_config
-            base_config = bettergi_config["base"]
-            scheduled_config = bettergi_config["scheduled_task"]
-            
-            bettergi_dir = base_config.get("bettergi_dir", "未配置")
-            debug_log = base_config.get("debug_log", False)
-            default_command = base_config.get("default_command", "startOneDragon")
-            enable_schedule = scheduled_config.get("enable", False)
-            
-            logger.info("[BetterGI] 插件已加载")
-            logger.info(f"[BetterGI] BetterGI 路径: {bettergi_dir}")
-            logger.info(f"[BetterGI] 默认命令: {default_command}")
-            logger.info(f"[BetterGI] 定时任务: {'开启' if enable_schedule else '关闭'}")
-            
-            if enable_schedule:
-                logger.info("[BetterGI] 定时任务已启用")
-                bettergi_service.start_scheduled_task(self.context, self.config)
-                
-        except Exception as e:
-            logger.error(f"[BetterGI] 初始化失败: {e}", exc_info=True)
-    
-    def _cleanup_screenshots(self, max_age_days: int = 7) -> None:
+
+    def _init_config(self) -> None:
+        self._cmd_names = self.config.get("command_names", {})
+        self._prefix = self._cmd_names.get("prefix", "better")
+        self._cmd_run = self._cmd_names.get("run", "运行")
+        self._cmd_status = self._cmd_names.get("status", "状态")
+        self._cmd_stop = self._cmd_names.get("stop", "停止")
+        self._cmd_log = self._cmd_names.get("log", "日志")
+        self._cmd_bind = self._cmd_names.get("bind", "绑定")
+        self._cmd_help = self._cmd_names.get("help", "帮助")
+        self._debug = self.config.get("debug_log", False)
+
+    def _get_data_dir(self) -> str:
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-            from pathlib import Path
-            save_dir = Path(get_astrbot_data_path()) / "plugin_data" / "bettergi" / "screenshots"
-            save_dir.mkdir(parents=True, exist_ok=True)
-            
-            max_age_seconds = max_age_days * 24 * 60 * 60
-            current_time = time.time()
-            
-            for filename in os.listdir(save_dir):
-                file_path = os.path.join(save_dir, filename)
-                
-                if not filename.startswith("status_") or not filename.endswith(".png"):
-                    continue
-                    
-                file_mtime = os.path.getmtime(file_path)
-                
-                if current_time - file_mtime > max_age_seconds:
-                    os.remove(file_path)
-                    logger.debug(f"[BetterGI] 已删除旧截图: {filename}")
-                    
-        except Exception as e:
-            logger.error(f"[BetterGI] 清理截图失败: {e}", exc_info=True)
-    
-    def _validate_config(self) -> Tuple[bool, str]:
-        base_config = self.bettergi_config["base"]
-        
-        bettergi_dir = base_config.get("bettergi_dir", "")
-        if not bettergi_dir:
-            return False, "BetterGI路径未配置"
-            
-        if not os.path.exists(bettergi_dir):
-            return False, f"BetterGI 目录不存在: {bettergi_dir}"
-            
-        bettergi_exe = os.path.join(bettergi_dir, "BetterGI.exe")
-        if not os.path.exists(bettergi_exe):
-            return False, f"BetterGI 可执行文件不存在: {bettergi_exe}"
-            
-        return True, ""
-    
+
+            return os.path.join(get_astrbot_data_path(), "plugin_data", "bettergi")
+        except Exception:
+            return ""
+
     def _check_permission(self, event: AstrMessageEvent) -> bool:
-        better_master = self.bettergi_config.get("better_master", [])
-        user_id = event.get_sender_id()
-        logger.info(f"[BetterGI] 检查权限 - 用户ID: {user_id}, 管理员列表: {better_master}")
-        if not better_master:
+        sender_id = str(event.get_sender_id())
+
+        try:
+            bot_admins = self.context.get_bot_config().get("admins_id", [])
+        except Exception:
+            bot_admins = []
+
+        if sender_id in [str(a) for a in bot_admins]:
             return True
-        return user_id in better_master
-    
-    @filter.command("better")
-    async def better_command(self, event: AstrMessageEvent):
-        """BetterGI 主命令
-        
-        better运行 - 运行默认命令
-        better运行 1 - 运行配置中的第1个命令
-        better状态 - 查看当前状态
-        better停止 - 停止当前任务
-        better帮助 - 显示帮助信息
-        """
+
+        masters = self.config.get("better_master", [])
+        if not masters:
+            return True
+        return sender_id in [str(m) for m in masters]
+
+    def _get_commands(self) -> list[dict[str, Any]]:
+        """获取配置的命令列表。"""
+        return self.config.get("commands", [])
+
+    def _get_command_at(self, index: int) -> list[str] | None:
+        """根据序号获取命令参数。"""
+        commands = self._get_commands()
+        if not commands or index < 1 or index > len(commands):
+            return None
+        entry = commands[index - 1]
+        template_key = entry.get("__template_key", "dragon")
+        config_name = entry.get("config_name", "")
+        return build_command(template_key, config_name)
+
+    @filter.on_astrbot_loaded()
+    async def on_loaded(self):
+        """AstrBot 初始化完成后启动服务。"""
+        webhook_cfg = self.config.get("webhook", {})
+        if webhook_cfg.get("enable", True):
+            ok = await self._webhook_server.start()
+            if not ok:
+                logger.warning("[BetterGI] Webhook 服务器启动失败，请检查端口配置")
+
+        scheduled = self.config.get("scheduled_task", {})
+        if scheduled.get("enable", False):
+            self._scheduler.start(self._run_scheduled_task)
+
+        logger.info("[BetterGI] 插件已加载")
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent):
+        """监听所有消息，手动解析自定义命令。"""
         if not self._check_permission(event):
             return
-        
-        event.stop_event()
-        
-        msg = event.message_str.strip()
-        if msg.startswith("better"):
-            msg = msg[len("better"):].strip()
-        
-        logger.info(f"[BetterGI] 处理命令: '{msg}'")
-        
-        async for result in self._route_command(event, msg):
-            yield result
-    
-    async def _route_command(self, event: AstrMessageEvent, msg: str):
-        if msg.startswith("运行") or msg.startswith("run") or msg.startswith("启动"):
-            async for result in self._handle_run_command(event, msg):
-                yield result
-        elif msg in ["帮助", "help", "使用帮助"]:
-            help_text = self.bettergi_config.get("help_text", "帮助信息未配置").strip()
-            await _send_with_recall(self, event, MessageChain().message(help_text))
-        elif msg in ["停止", "stop", "终止", "结束"]:
-            result = await bettergi_service.stop_task(self.context)
-            if result:
-                yield event.plain_result("✅ BetterGI 任务已停止")
-            else:
-                yield event.plain_result("❌ 当前没有正在运行的 BetterGI 任务")
-        elif msg in ["状态", "status", "信息", "info"]:
-            async for result in self._handle_status_command(event):
-                yield result
-        elif msg.startswith("删除") or msg.startswith("remove") or msg.startswith("rm"):
-            yield await self._handle_remove_command(event, msg)
-    
-    async def _handle_run_command(self, event: AstrMessageEvent, msg: str):
-        try:
-            cmd_prefix = None
-            for prefix in ["运行", "run", "启动"]:
-                if msg.startswith(prefix):
-                    cmd_prefix = prefix
-                    break
-            
-            if not cmd_prefix:
-                return
-                
-            command_part = msg[len(cmd_prefix):].strip()
-            commands_to_run = await self._parse_command_part(event, command_part)
-            
-            if not commands_to_run:
-                return
-            
-            is_valid, error_msg = self._validate_config()
-            if not is_valid:
-                yield event.plain_result(f"❌ {error_msg}")
-                return
-            
-            result = await bettergi_service.run_bettergi(self.context, self.config, commands_to_run)
-            
-            if result:
-                yield event.plain_result(f"✅ 命令已加入队列: {'、'.join(commands_to_run)}")
-            else:
-                yield event.plain_result(f"❌ BetterGI 运行失败，命令: {'、'.join(commands_to_run)}")
-                
-        except Exception as e:
-            logger.error(f"[BetterGI] 运行命令失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 运行出错: {str(e)}")
-    
-    async def _parse_command_part(self, event: AstrMessageEvent, command_part: str) -> Optional[List[str]]:
-        try:
-            user_id = event.get_sender_id()
-            manual_commands = self.bettergi_config["manual_trigger"].get("command", None)
-            
-            if user_id in self.bettergi_user_state and self.bettergi_user_state[user_id] == 'selecting_command':
-                return await self._handle_command_selection(event, manual_commands, command_part, user_id)
-            
-            if command_part.lower() == "select" or command_part == "选择":
-                return await self._handle_command_list_request(event, manual_commands, user_id)
-            
-            if command_part.isdigit() and manual_commands and isinstance(manual_commands, list):
-                return await self._handle_direct_index_selection(event, manual_commands, command_part)
-            
-            if command_part:
-                logger.info(f"[BetterGI] 自定义命令: {command_part}")
-                return [command_part]
-            
-            default_command = self.bettergi_config["base"].get("default_command", "startOneDragon")
-            logger.info(f"[BetterGI] 使用默认命令: {default_command}")
-            return default_command if isinstance(default_command, list) else [default_command]
-            
-        except Exception as e:
-            logger.error(f"[BetterGI] 解析命令失败: {e}", exc_info=True)
-            return None
-    
-    async def _handle_command_selection(self, event: AstrMessageEvent, manual_commands: Optional[List[str]], 
-                                       command_part: str, user_id: str) -> Optional[List[str]]:
-        if user_id in self.bettergi_user_state:
-            del self.bettergi_user_state[user_id]
-        
-        index_str = command_part[2:].strip() if command_part.startswith("选择") or command_part.startswith("select") else command_part.strip()
-        
-        try:
-            index = int(index_str) - 1
-            if manual_commands and isinstance(manual_commands, list) and 0 <= index < len(manual_commands):
-                return [manual_commands[index]]
-            else:
-                await event.send(MessageChain().message(f"无效的命令索引，请输入 1-{len(manual_commands)} 之间的数字"))
-        except ValueError:
-            await event.send(MessageChain().message("请输入有效的数字索引"))
-        return None
-    
-    async def _handle_command_list_request(self, event: AstrMessageEvent, manual_commands: Optional[List[str]], 
-                                          user_id: str) -> Optional[List[str]]:
-        if manual_commands and isinstance(manual_commands, list) and manual_commands:
-            msg = "📋 可用命令列表：\n" + "\n".join([f"{i}. {cmd}" for i, cmd in enumerate(manual_commands, 1)])
-            msg += "\n\n请输入序号选择要执行的命令"
-            
-            self.bettergi_user_state[user_id] = 'selecting_command'
-            await _send_with_recall(self, event, MessageChain().message(msg))
-        else:
-            await event.send(MessageChain().message("配置中没有设置命令列表"))
-        return None
-    
-    async def _handle_direct_index_selection(self, event: AstrMessageEvent, manual_commands: List[str], 
-                                            command_part: str) -> Optional[List[str]]:
-        try:
-            index = int(command_part) - 1
-            if 0 <= index < len(manual_commands):
-                return [manual_commands[index]]
-            else:
-                await event.send(MessageChain().message(f"无效的命令索引，请输入 1-{len(manual_commands)} 之间的数字"))
-        except Exception as e:
-            logger.error(f"[BetterGI] 索引选择失败: {e}", exc_info=True)
-        return None
-    
-    async def _handle_remove_command(self, event: AstrMessageEvent, msg: str) -> MessageEventResult:
-        try:
-            cmd_prefix = None
-            for prefix in ["删除", "remove", "rm"]:
-                if msg.startswith(prefix):
-                    cmd_prefix = prefix
-                    break
-            
-            if not cmd_prefix:
-                return event.plain_result("❌ 无效的删除命令格式")
-                
-            params = msg[len(cmd_prefix):].strip()
-            
-            if not params:
-                return event.plain_result("❌ 请指定要删除的命令或输入'list'查看队列")
-            
-            if params.lower() == "list" or params == "列表":
-                queue_list = await self._show_queue_list()
-                return event.plain_result(queue_list + "\n输入 'better删除 索引' 删除对应命令")
-            elif params.isdigit():
-                return await self._remove_by_index(event, int(params))
-            else:
-                return await self._remove_by_command(event, params)
-                
-        except Exception as e:
-            logger.error(f"[BetterGI] 删除命令失败: {e}", exc_info=True)
-            return event.plain_result(f"❌ 删除出错: {str(e)}")
-    
-    async def _show_queue_list(self) -> str:
-        try:
-            queue_commands = await bettergi_service.get_queue_commands()
-            
-            if not queue_commands:
-                return "📋 当前队列为空"
-            
-            return "📋 当前队列命令列表：\n" + "\n".join([f"{cmd['index']}. {cmd['command']}" for cmd in queue_commands])
-        except Exception as e:
-            logger.error(f"[BetterGI] 获取队列失败: {e}", exc_info=True)
-            return f"❌ 获取队列列表失败: {str(e)}"
-    
-    async def _remove_by_index(self, event: AstrMessageEvent, index: int) -> MessageEventResult:
-        try:
-            queue_commands = await bettergi_service.get_queue_commands()
-            
-            if not queue_commands:
-                return event.plain_result("📋 当前队列为空")
-            
-            if 1 <= index <= len(queue_commands):
-                command_to_remove = queue_commands[index-1]["command"]
-                removed_count = await bettergi_service.remove_command_from_queue(command_to_remove)
-                if removed_count > 0:
-                    return event.plain_result(f"✅ 成功从队列中删除命令: {command_to_remove}")
-                else:
-                    return event.plain_result("❌ 删除失败，命令可能已被处理")
-            else:
-                return event.plain_result(f"❌ 索引无效，有效索引范围是 1-{len(queue_commands)}")
-        except Exception as e:
-            logger.error(f"[BetterGI] 删除命令失败: {e}", exc_info=True)
-            return event.plain_result(f"❌ 删除命令失败: {str(e)}")
-    
-    async def _remove_by_command(self, event: AstrMessageEvent, command_to_remove: str) -> MessageEventResult:
-        removed_count = await bettergi_service.remove_command_from_queue(command_to_remove)
-        
-        if removed_count > 0:
-            return event.plain_result(f"✅ 成功从队列中删除 {removed_count} 个 '{command_to_remove}' 命令")
-        else:
-            return event.plain_result(f"❌ 队列中未找到命令 '{command_to_remove}'")
-    
-    async def _handle_status_command(self, event: AstrMessageEvent):
-        try:
-            base_config = self.bettergi_config["base"]
-            scheduled_config = self.bettergi_config["scheduled_task"]
-            manual_enabled = self.bettergi_config["manual_trigger"].get("enable", True)
-            
-            status_info = await self._get_status(base_config, scheduled_config)
-            message = self._build_status_message(status_info, base_config, scheduled_config, manual_enabled)
-            picture_path = await self._build_status_picture()
-            
-            from astrbot.api.message_components import Image, Plain
-            
-            platform_name = event.get_platform_name()
-            
-            if picture_path and os.path.exists(picture_path):
-                if platform_name == "aiocqhttp":
-                    await _send_with_recall(self, event, MessageChain([Plain(message), Image(file=picture_path)]))
-                else:
-                    await _send_with_recall(self, event, MessageChain().message(message))
-                    await _send_with_recall(self, event, MessageChain([Image(file=picture_path)]))
-            else:
-                await _send_with_recall(self, event, MessageChain().message(message))
-                
-        except Exception as e:
-            logger.error(f"[BetterGI] 获取状态失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 获取状态信息失败: {str(e)}")
-    
-    async def _get_status(self, base_config: Dict[str, Any], scheduled_config: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            queue_status = await bettergi_service.get_status()
-            queue_list = await self._show_queue_list()
-            
-            bettergi_dir = base_config.get("bettergi_dir", "")
-            dir_exists = os.path.exists(bettergi_dir) if bettergi_dir else False
-            exe_exists = os.path.exists(os.path.join(bettergi_dir, "BetterGI.exe")) if dir_exists else False
-            
-            return {
-                "queue_enabled": queue_status.get('queue_enabled', False),
-                "queue_size": queue_status.get('queue_size', 0),
-                "current_command": queue_status.get('current_command', None),
-                "scheduled_running": bettergi_service.task_running,
-                "running_processes_count": len(running_processes),
-                "active_tasks_count": len(getattr(bettergi_service, 'active_tasks', [])),
-                "queue_list": queue_list,
-                "dir_exists": dir_exists,
-                "exe_exists": exe_exists,
-            }
-        except Exception as e:
-            logger.error(f"[BetterGI] 收集状态失败: {e}", exc_info=True)
-            return {
-                "queue_enabled": False,
-                "queue_size": 0,
-                "current_command": None,
-                "scheduled_running": False,
-                "running_processes_count": 0,
-                "active_tasks_count": 0,
-                "queue_list": "❌ 获取队列信息失败",
-                "dir_exists": False,
-                "exe_exists": False,
-            }
-    
-    async def _build_status_picture(self) -> str:
-        try:
-            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-            from pathlib import Path
-            import win32gui
-            import win32ui
-            import win32con
-            import win32api
-            from PIL import Image
-            
-            save_dir = Path(get_astrbot_data_path()) / "plugin_data" / "bettergi" / "screenshots"
-            save_dir.mkdir(parents=True, exist_ok=True)
-            
-            try:
-                hwnd = win32gui.GetDesktopWindow()
-                hwnd_dc = win32gui.GetWindowDC(hwnd)
-                mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
-                save_dc = mfc_dc.CreateCompatibleDC()
-                
-                width = win32api.GetSystemMetrics(0)
-                height = win32api.GetSystemMetrics(1)
-                
-                bitmap = win32ui.CreateBitmap()
-                bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
-                
-                save_dc.SelectObject(bitmap)
-                save_dc.BitBlt((0, 0), (width, height), mfc_dc, (0, 0), win32con.SRCCOPY)
-                
-                bmpinfo = bitmap.GetInfo()
-                bmpstr = bitmap.GetBitmapBits(True)
-                
-                image = Image.frombuffer('RGB', (bmpinfo['bmWidth'], bmpinfo['bmHeight']), 
-                                        bmpstr, 'raw', 'BGRX', 0, 1)
-                
-                win32gui.DeleteObject(bitmap.GetHandle())
-                save_dc.DeleteDC()
-                mfc_dc.DeleteDC()
-                win32gui.ReleaseDC(hwnd, hwnd_dc)
-                
-                logger.info(f"[BetterGI] Windows API 截图成功，分辨率：{width}x{height}")
-                
-            except Exception as win32_err:
-                logger.warning(f"Windows API 截图失败，使用 ImageGrab: {win32_err}")
-                image = ImageGrab.grab()
-            
-            save_path = save_dir / f"status_{int(time.time())}.png"
-            image.save(save_path)
-            logger.info(f"[BetterGI] 截图已保存：{save_path}")
-            return str(save_path)
-            
-        except Exception as e:
-            logger.error(f"[BetterGI] 截图失败：{e}", exc_info=True)
-            return ""
-    
-    def _build_status_message(self, status_info: Dict[str, Any], base_config: Dict[str, Any], 
-                              scheduled_config: Dict[str, Any], manual_enabled: bool) -> str:
-        try:
-            msg = f"""📊 BetterGI 当前状态：
 
-🔹 运行状态
-   当前执行命令: {status_info["current_command"] or "无"}
-   {status_info["queue_list"]}
-🔹 当前屏幕内容截图"""
-        
-            if not status_info["dir_exists"]:
-                msg += "\n\n⚠️ 警告：BetterGI目录不存在"
-            elif not status_info["exe_exists"]:
-                msg += "\n\n⚠️ 警告：BetterGI可执行文件不存在"
-        
-            return msg
+        msg = event.message_str.strip()
+        prefix = self._prefix
+
+        if not msg.startswith(prefix):
+            return
+
+        sub = msg[len(prefix) :].strip()
+        if not sub:
+            return
+
+        event.stop_event()
+
+        if sub.startswith(self._cmd_run):
+            cmd_arg = sub[len(self._cmd_run) :].strip()
+            async for result in self._handle_run(event, cmd_arg):
+                yield result
+        elif sub.startswith(self._cmd_status):
+            async for result in self._handle_status(event):
+                yield result
+        elif sub.startswith(self._cmd_stop):
+            async for result in self._handle_stop(event):
+                yield result
+        elif sub.startswith(self._cmd_log):
+            cmd_arg = sub[len(self._cmd_log) :].strip()
+            yield await self._handle_log(event, cmd_arg)
+        elif sub.startswith(self._cmd_bind):
+            yield await self._handle_bind(event)
+        elif sub.startswith(self._cmd_help):
+            yield event.plain_result(self._build_help_text())
+
+    async def _handle_run(self, event: AstrMessageEvent, arg: str):
+        commands = self._get_commands()
+
+        if not commands:
+            yield event.plain_result("❌ 未配置任何命令，请先在配置中添加")
+            return
+
+        if arg in ("", "默认", "default"):
+            args = self._get_command_at(1)
+            if args:
+                yield event.plain_result(f"✅ 正在执行第1个命令: {' '.join(args)}")
+                await self._execute_command(args)
+            else:
+                yield event.plain_result("❌ 无法解析第1个命令配置")
+            return
+
+        if arg in ("选择", "select", "列表", "list"):
+            msg_lines = ["📋 可用命令列表："]
+            for i, cmd in enumerate(commands, 1):
+                key = cmd.get("__template_key", "unknown")
+                name = cmd.get("config_name", "未命名")
+                type_name = "一条龙" if key == "dragon" else "调度器"
+                msg_lines.append(f"{i}. [{type_name}] {name}")
+            msg_lines.append(f"\n发送 {self._prefix}{self._cmd_run} 序号 来执行")
+            yield event.plain_result("\n".join(msg_lines))
+            return
+
+        if arg.isdigit():
+            index = int(arg)
+            args = self._get_command_at(index)
+            if args:
+                yield event.plain_result(
+                    f"✅ 正在执行第{index}个命令: {' '.join(args)}"
+                )
+                await self._execute_command(args)
+            else:
+                yield event.plain_result(
+                    f"❌ 无效的序号，请输入 1-{len(commands)} 之间的数字"
+                )
+            return
+
+        if arg.startswith("--"):
+            yield event.plain_result("❌ 请使用命令配置列表，无需手动填写命令参数")
+            return
+
+        yield event.plain_result(
+            f"发送 {self._prefix}{self._cmd_run} 选择 查看可用命令"
+        )
+
+    async def _execute_command(self, args: list[str]) -> None:
+        """执行命令的实际逻辑。"""
+        ok, msg = await self._runner.check_env()
+        if not ok:
+            logger.error(f"[BetterGI] 环境检查失败: {msg}")
+            return
+
+        success = await self._runner.run(args)
+        if not success:
+            logger.error(f"[BetterGI] 命令执行失败: {' '.join(args)}")
+
+    async def _handle_stop(self, event: AstrMessageEvent):
+        stopped = await self._runner.stop()
+        if stopped:
+            yield event.plain_result("✅ BetterGI 任务已停止")
+        else:
+            yield event.plain_result("❌ 当前没有正在运行的任务")
+
+    async def _handle_status(self, event: AstrMessageEvent):
+        status = await self._runner.get_status()
+        sched_status = self._scheduler.get_status()
+
+        lines = ["📊 BetterGI 状态：", ""]
+
+        mode = status.get("mode", "local")
+        mode_name = "本地" if mode == "local" else "远程"
+        lines.append(f"🔹 运行模式: {mode_name}")
+
+        is_running = status.get("is_running", False)
+        lines.append(f"🔹 运行状态: {'运行中' if is_running else '空闲'}")
+
+        current = status.get("current_command", "")
+        if current:
+            lines.append(f"🔹 当前命令: {current}")
+
+        if status.get("pid"):
+            lines.append(f"🔹 进程PID: {status['pid']}")
+
+        webhook_running = self._webhook_server.is_running
+        lines.append(f"🔹 Webhook: {'已启动' if webhook_running else '未启动'}")
+        if webhook_running:
+            lines.append(f"  地址: {self._webhook_server.webhook_url}")
+
+        lines.append(
+            f"🔹 定时任务: {'已启用' if sched_status.get('is_running') else '未启用'}"
+        )
+        if sched_status.get("last_run_date"):
+            lines.append(f"  上次执行: {sched_status['last_run_date']}")
+
+        if self._notify_umo:
+            lines.append("🔹 通知绑定: 已绑定")
+
+        yield event.plain_result("\n".join(lines))
+
+    async def _handle_log(
+        self, event: AstrMessageEvent, arg: str
+    ) -> MessageEventResult:
+        if arg in ("清除", "清空", "clear"):
+            count = await self._event_store.clear()
+            return event.plain_result(f"✅ 已清除 {count} 条事件记录")
+
+        count = 10
+        if arg.isdigit():
+            count = int(arg)
+
+        events = await self._event_store.get_recent(count)
+        text = EventStore.format_events(events)
+        return event.plain_result(text)
+
+    async def _handle_bind(self, event: AstrMessageEvent) -> MessageEventResult:
+        umo = event.unified_msg_origin
+        self._notify_umo = umo
+
+        try:
+            self.config["notify"]["umo"] = umo
+            self.config.save_config()
         except Exception as e:
-            logger.error(f"[BetterGI] 构建状态消息失败: {e}", exc_info=True)
-            return f"❌ 构建状态消息失败: {str(e)}"
-    
+            logger.warning(f"[BetterGI] 保存绑定配置失败: {e}")
+
+        return event.plain_result(
+            "✅ 已绑定当前会话为通知接收方\nBetterGI 事件将自动转发到此处"
+        )
+
+    async def _on_webhook_event(self, event_data: dict) -> None:
+        """处理 BetterGI Webhook 事件。"""
+        await self._event_store.add(event_data)
+
+        event_type = event_data.get("event", "")
+        message = event_data.get("message", "")
+        result = event_data.get("result", "")
+        timestamp = event_data.get("timestamp", "")
+
+        logger.info(f"[BetterGI] Webhook 事件: {event_type} | {result} | {message}")
+
+        if self._notify_umo and self._should_notify(event_type):
+            await self._send_notify(event_type, result, message, timestamp)
+
+    def _should_notify(self, event_type: str) -> bool:
+        events_cfg = self.config.get("notify", {}).get("events", {})
+        config_key = self._event_map.get(event_type)
+        if not config_key:
+            return False
+        return events_cfg.get(config_key, False)
+
+    async def _send_notify(
+        self, event_type: str, result: str, message: str, timestamp: str
+    ) -> None:
+        """发送事件通知到绑定的会话。"""
+        try:
+            text = (
+                f"📢 BetterGI 事件通知\n"
+                f"事件: {event_type}\n"
+                f"结果: {result}\n"
+                f"时间: {timestamp}\n"
+            )
+            if message:
+                text += f"消息: {message}"
+
+            chain = MessageChain().message(text)
+            await self.context.send_message(self._notify_umo, chain)
+        except Exception as e:
+            logger.error(f"[BetterGI] 发送通知失败: {e}")
+
+    async def _run_scheduled_task(self) -> None:
+        """定时任务执行函数。"""
+        scheduled = self.config.get("scheduled_task", {})
+        index = scheduled.get("command_index", 1)
+
+        args = self._get_command_at(index)
+        if not args:
+            logger.error(f"[BetterGI] 定时任务: 无法找到第{index}个命令配置")
+            return
+
+        logger.info(f"[BetterGI] 定时任务执行: {' '.join(args)}")
+        await self._execute_command(args)
+
+    def _build_help_text(self) -> str:
+        p = self._prefix
+        return (
+            f"BetterGI 远程控制插件 使用帮助\n\n"
+            f"📌 命令列表（前缀: {p}）：\n"
+            f"  {p}{self._cmd_run}        - 运行第1个命令\n"
+            f"  {p}{self._cmd_run} 选择   - 查看可用命令列表\n"
+            f"  {p}{self._cmd_run} 序号   - 运行指定序号的命令\n"
+            f"  {p}{self._cmd_status}      - 查看运行状态\n"
+            f"  {p}{self._cmd_stop}        - 停止当前任务\n"
+            f"  {p}{self._cmd_log}        - 查看最近事件日志\n"
+            f"  {p}{self._cmd_log} 清除   - 清除事件记录\n"
+            f"  {p}{self._cmd_bind}        - 绑定通知会话\n"
+            f"  {p}{self._cmd_help}        - 显示此帮助\n\n"
+            f"📌 Webhook 配置：\n"
+            f"  在 BetterGI 设置中配置 Webhook 地址为：\n"
+            f"  {self._webhook_server.webhook_url}\n\n"
+            f"📌 事件类型参考：\n"
+            f"  dragon.start/end - 一条龙启动/结束\n"
+            f"  group.start/end  - 配置组启动/结束\n"
+            f"  task.cancel/error - 任务取消/错误\n"
+            f"  domain.start/end/reward/retry - 秘境相关\n"
+            f"  tcg.start/end - 七圣召唤启动/结束\n"
+            f"  album.start/end/error - 音游相关\n"
+            f"  autoeat.start/end/info - 自动吃药\n"
+            f"  daily.reward - 每日奖励状态\n"
+            f"  js.custom/error - JS自定义/错误\n"
+            f"  notify.test - 测试通知"
+        )
+
     async def terminate(self):
+        """插件卸载时清理资源。"""
         logger.info("[BetterGI] 插件正在卸载...")
-        await bettergi_service.stop_task(self.context)
+        await self._scheduler.stop()
+        await self._webhook_server.stop()
+        await self._runner.cleanup()
         logger.info("[BetterGI] 插件已卸载")
