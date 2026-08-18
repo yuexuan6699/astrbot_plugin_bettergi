@@ -64,7 +64,9 @@ class EventStore:
         async with self._lock:
             self._events.append(record)
             self._save_to_file()
-        logger.info(f"[BetterGI] 事件已存储: {record['event']} - {record['message']}")
+        logger.info(
+            f"[BetterGI-Store] 事件已存储: {record['event']} - {record['message']} - has_screenshot={record.get('has_screenshot', False)}"
+        )
 
     async def get_recent(self, count: int = 10) -> list[dict[str, Any]]:
         """获取最近的 N 条事件。"""

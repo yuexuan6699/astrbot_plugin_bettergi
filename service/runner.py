@@ -304,13 +304,16 @@ def create_runner(config: dict) -> LocalRunner | RemoteRunner:
 
     if mode == "remote":
         remote_config = config.get("remote", {})
+        logger.info(f"[BetterGI-Runner] 创建 RemoteRunner: url={remote_config.get('url', 'http://127.0.0.1:9099')}")
         return RemoteRunner(
             url=remote_config.get("url", "http://127.0.0.1:9099"),
             token=remote_config.get("token", ""),
             timeout=30,
         )
     else:
+        bettergi_dir = config.get("bettergi_dir", "")
+        logger.info(f"[BetterGI-Runner] 创建 LocalRunner: bettergi_dir={bettergi_dir}, timeout={timeout}")
         return LocalRunner(
-            bettergi_dir=config.get("bettergi_dir", ""),
+            bettergi_dir=bettergi_dir,
             timeout=timeout,
         )
