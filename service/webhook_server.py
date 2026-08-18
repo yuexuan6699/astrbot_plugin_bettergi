@@ -40,7 +40,7 @@ class WebhookServer:
     async def _handle_webhook(self, request: web.Request) -> web.Response:
         """处理 BetterGI 的 Webhook POST 请求。"""
         try:
-            logger.info(f"[BetterGI-Webhook] 收到请求: method={request.method}, path={request.path}")
+            logger.debug("[BetterGI-Webhook] 收到请求: method=%s, path=%s", request.method, request.path)
 
             if self._token:
                 auth = request.headers.get("Authorization", "")
@@ -53,31 +53,31 @@ class WebhookServer:
                 if token_val != self._token and query_token != self._token:
                     logger.warning("[BetterGI-Webhook] 令牌验证失败")
                     return web.json_response({"error": "unauthorized"}, status=401)
-                logger.info("[BetterGI-Webhook] 令牌验证通过")
+                logger.debug("[BetterGI-Webhook] 令牌验证通过")
 
             body = await request.read()
-            logger.info(f"[BetterGI-Webhook] 请求体大小: {len(body)} 字节")
+            logger.debug("[BetterGI-Webhook] 请求体大小: %d 字节", len(body))
             if not body:
                 logger.warning("[BetterGI-Webhook] 请求体为空")
                 return web.json_response({"error": "empty body"}, status=400)
 
             event_data = json.loads(body)
-            logger.info(f"[BetterGI-Webhook] 解析事件: {event_data.get('event')}")
-            logger.info(f"[BetterGI-Webhook] 事件字段: {list(event_data.keys())}")
+            logger.info("[BetterGI-Webhook] 收到事件: %s", event_data.get("event"))
+            logger.debug("[BetterGI-Webhook] 事件字段: %s", list(event_data.keys()))
 
             if self._handler:
                 try:
                     await self._handler(event_data)
                 except Exception as e:
-                    logger.error(f"[BetterGI-Webhook] 事件处理失败: {e}", exc_info=True)
+                    logger.error("[BetterGI-Webhook] 事件处理失败: %s", e, exc_info=True)
 
             return web.json_response({"status": "ok"})
 
         except json.JSONDecodeError:
-            logger.warning(f"[BetterGI-Webhook] 请求体不是有效的 JSON: {body[:200]}")
+            logger.warning("[BetterGI-Webhook] 请求体不是有效的 JSON: %s", body[:200])
             return web.json_response({"error": "invalid json"}, status=400)
         except Exception as e:
-            logger.error(f"[BetterGI-Webhook] 处理请求失败: {e}", exc_info=True)
+            logger.error("[BetterGI-Webhook] 处理请求失败: %s", e, exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
 
     async def _handle_health(self, request: web.Request) -> web.Response:

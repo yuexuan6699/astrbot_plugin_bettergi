@@ -17,23 +17,33 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.8")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.9")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         self._init_config()
 
-        logger.info("[BetterGI-Init] 配置加载完成")
-        logger.info(f"[BetterGI-Init] 前缀: {self._prefix}")
-        logger.info(f"[BetterGI-Init] 命令别名: run={self._cmd_run}, status={self._cmd_status}, stop={self._cmd_stop}, log={self._cmd_log}, bind={self._cmd_bind}, help={self._cmd_help}")
+        logger.info("[BetterGI] 插件初始化中...")
+        logger.debug("[BetterGI-Init] 前缀: %s", self._prefix)
+        logger.debug(
+            "[BetterGI-Init] 命令别名: run=%s, status=%s, stop=%s, log=%s, bind=%s, help=%s",
+            self._cmd_run, self._cmd_status, self._cmd_stop,
+            self._cmd_log, self._cmd_bind, self._cmd_help,
+        )
 
         self._event_store = EventStore(self._get_data_dir())
         self._runner = create_runner(config)
         self._scheduler = Scheduler()
 
         webhook_cfg = config.get("webhook", {})
-        logger.info(f"[BetterGI-Init] Webhook 配置: enable={webhook_cfg.get('enable', True)}, host={webhook_cfg.get('host', '0.0.0.0')}, port={webhook_cfg.get('port', 8088)}, path={webhook_cfg.get('path', '/bettergi/webhook')}")
+        logger.debug(
+            "[BetterGI-Init] Webhook: enable=%s, host=%s, port=%s, path=%s",
+            webhook_cfg.get("enable", True),
+            webhook_cfg.get("host", "0.0.0.0"),
+            webhook_cfg.get("port", 8088),
+            webhook_cfg.get("path", "/bettergi/webhook"),
+        )
 
         self._webhook_server = WebhookServer(
             host=webhook_cfg.get("host", "0.0.0.0"),
@@ -48,8 +58,8 @@ class BetterGIPlugin(Star):
             self._notify_umo: list[str] = [raw_umo] if raw_umo else []
         else:
             self._notify_umo = [str(u) for u in raw_umo] if raw_umo else []
-        logger.info(f"[BetterGI-Init] 通知绑定会话: {self._notify_umo if self._notify_umo else '无'}")
-        logger.info(f"[BetterGI-Init] 数据目录: {self._get_data_dir()}")
+        logger.debug("[BetterGI-Init] 通知绑定会话: %s", self._notify_umo or "无")
+        logger.debug("[BetterGI-Init] 数据目录: %s", self._get_data_dir())
 
         self._event_map: dict[str, str] = {
             "notify.test": "notify_test",
@@ -111,17 +121,17 @@ class BetterGIPlugin(Star):
             bot_admins = []
 
         if sender_id in [str(a) for a in bot_admins]:
-            logger.info(f"[BetterGI-Perm] 用户 {sender_id} 是管理员，放行")
+            logger.debug("[BetterGI-Perm] 用户 %s 是管理员，放行", sender_id)
             return True
 
         masters = self.config.get("better_master", [])
         if not masters:
-            logger.info(f"[BetterGI-Perm] better_master 为空，用户 {sender_id} 放行")
+            logger.debug("[BetterGI-Perm] better_master 为空，用户 %s 放行", sender_id)
             return True
         if sender_id in [str(m) for m in masters]:
-            logger.info(f"[BetterGI-Perm] 用户 {sender_id} 在 better_master 列表中，放行")
+            logger.debug("[BetterGI-Perm] 用户 %s 在 better_master 列表中，放行", sender_id)
             return True
-        logger.warning(f"[BetterGI-Perm] 用户 {sender_id} 无权限")
+        logger.warning("[BetterGI-Perm] 用户 %s 无权限", sender_id)
         return False
 
     def _get_commands(self) -> list[dict[str, Any]]:
@@ -175,28 +185,28 @@ class BetterGIPlugin(Star):
         if not sub:
             return
 
-        logger.info(f"[BetterGI-Msg] 收到命令: msg='{msg}', prefix='{prefix}', sub='{sub}'")
+        logger.debug("[BetterGI-Msg] 收到命令: msg='%s', prefix='%s', sub='%s'", msg, prefix, sub)
 
         event.stop_event()
 
         matched = self._match_cmd(sub, self._cmd_run)
         if matched is not None:
             cmd_arg = sub[len(matched) :].strip()
-            logger.info(f"[BetterGI-Msg] 匹配到 run 命令: alias='{matched}', arg='{cmd_arg}'")
+            logger.debug("[BetterGI-Msg] 匹配到 run: alias='%s', arg='%s'", matched, cmd_arg)
             async for result in self._handle_run(event, cmd_arg):
                 yield result
             return
 
         matched = self._match_cmd(sub, self._cmd_status)
         if matched is not None:
-            logger.info(f"[BetterGI-Msg] 匹配到 status 命令: alias='{matched}'")
+            logger.debug("[BetterGI-Msg] 匹配到 status: alias='%s'", matched)
             async for result in self._handle_status(event):
                 yield result
             return
 
         matched = self._match_cmd(sub, self._cmd_stop)
         if matched is not None:
-            logger.info(f"[BetterGI-Msg] 匹配到 stop 命令: alias='{matched}'")
+            logger.debug("[BetterGI-Msg] 匹配到 stop: alias='%s'", matched)
             async for result in self._handle_stop(event):
                 yield result
             return
@@ -204,24 +214,24 @@ class BetterGIPlugin(Star):
         matched = self._match_cmd(sub, self._cmd_log)
         if matched is not None:
             cmd_arg = sub[len(matched) :].strip()
-            logger.info(f"[BetterGI-Msg] 匹配到 log 命令: alias='{matched}', arg='{cmd_arg}'")
+            logger.debug("[BetterGI-Msg] 匹配到 log: alias='%s', arg='%s'", matched, cmd_arg)
             yield await self._handle_log(event, cmd_arg)
             return
 
         matched = self._match_cmd(sub, self._cmd_bind)
         if matched is not None:
-            logger.info(f"[BetterGI-Msg] 匹配到 bind 命令: alias='{matched}'")
+            logger.debug("[BetterGI-Msg] 匹配到 bind: alias='%s'", matched)
             yield await self._handle_bind(event)
             return
 
         matched = self._match_cmd(sub, self._cmd_help)
         if matched is not None:
-            logger.info(f"[BetterGI-Msg] 匹配到 help 命令: alias='{matched}'")
+            logger.debug("[BetterGI-Msg] 匹配到 help: alias='%s'", matched)
             yield event.plain_result(self._build_help_text())
 
     async def _handle_run(self, event: AstrMessageEvent, arg: str):
         commands = self._get_commands()
-        logger.info(f"[BetterGI-Run] arg='{arg}', commands_count={len(commands) if commands else 0}")
+        logger.debug("[BetterGI-Run] arg='%s', commands_count=%d", arg, len(commands) if commands else 0)
 
         if not commands:
             yield event.plain_result("❌ 未配置任何命令，请先在配置中添加")
@@ -229,10 +239,10 @@ class BetterGIPlugin(Star):
 
         if arg in ("", "默认", "default"):
             args = self._get_command_at(1)
-            logger.info(f"[BetterGI-Run] 默认执行: args={args}")
+            logger.debug("[BetterGI-Run] 默认执行: args=%s", args)
             if args:
                 result = await self._execute_command(args)
-                logger.info(f"[BetterGI-Run] 执行结果: {result}")
+                logger.debug("[BetterGI-Run] 执行结果: %s", result)
                 if result and not result[0]:
                     yield event.plain_result(f"❌ {result[1]}")
                 else:
@@ -255,10 +265,10 @@ class BetterGIPlugin(Star):
         if arg.isdigit():
             index = int(arg)
             args = self._get_command_at(index)
-            logger.info(f"[BetterGI-Run] 序号 {index}: args={args}")
+            logger.debug("[BetterGI-Run] 序号 %d: args=%s", index, args)
             if args:
                 result = await self._execute_command(args)
-                logger.info(f"[BetterGI-Run] 执行结果: {result}")
+                logger.debug("[BetterGI-Run] 执行结果: %s", result)
                 if result and not result[0]:
                     yield event.plain_result(f"❌ {result[1]}")
                 else:
@@ -281,24 +291,24 @@ class BetterGIPlugin(Star):
 
     async def _execute_command(self, args: list[str]) -> tuple[bool, str] | None:
         """执行命令的实际逻辑。返回 (成功, 消息) 或 None。"""
-        logger.info(f"[BetterGI-Exec] 开始执行: args={args}")
+        logger.debug("[BetterGI-Exec] 开始执行: args=%s", args)
         ok, msg = await self._runner.check_env()
-        logger.info(f"[BetterGI-Exec] 环境检查: ok={ok}, msg={msg}")
+        logger.debug("[BetterGI-Exec] 环境检查: ok=%s, msg=%s", ok, msg)
         if not ok:
-            logger.error(f"[BetterGI] 环境检查失败: {msg}")
+            logger.error("[BetterGI] 环境检查失败: %s", msg)
             return False, f"环境检查失败: {msg}"
 
         success = await self._runner.run(args)
-        logger.info(f"[BetterGI-Exec] runner.run 返回: {success}")
+        logger.debug("[BetterGI-Exec] runner.run 返回: %s", success)
         if not success:
-            logger.error(f"[BetterGI] 命令执行失败: {' '.join(args)}")
+            logger.error("[BetterGI] 命令执行失败: %s", " ".join(args))
             return False, "命令执行失败，请查看日志"
         return True, "OK"
 
     async def _handle_stop(self, event: AstrMessageEvent):
-        logger.info("[BetterGI-Stop] 尝试停止任务")
+        logger.debug("[BetterGI-Stop] 尝试停止任务")
         stopped = await self._runner.stop()
-        logger.info(f"[BetterGI-Stop] 停止结果: {stopped}")
+        logger.debug("[BetterGI-Stop] 停止结果: %s", stopped)
         if stopped:
             yield event.plain_result("✅ BetterGI 任务已停止")
         else:
@@ -307,7 +317,7 @@ class BetterGIPlugin(Star):
     async def _handle_status(self, event: AstrMessageEvent):
         status = await self._runner.get_status()
         sched_status = self._scheduler.get_status()
-        logger.info(f"[BetterGI-Status] runner={status}, scheduler={sched_status}")
+        logger.debug("[BetterGI-Status] runner=%s, scheduler=%s", status, sched_status)
 
         lines = ["📊 BetterGI 状态：", ""]
 
@@ -344,10 +354,10 @@ class BetterGIPlugin(Star):
     async def _handle_log(
         self, event: AstrMessageEvent, arg: str
     ) -> MessageEventResult:
-        logger.info(f"[BetterGI-Log] arg='{arg}'")
+        logger.debug("[BetterGI-Log] arg='%s'", arg)
         if arg in ("清除", "清空", "clear"):
             count = await self._event_store.clear()
-            logger.info(f"[BetterGI-Log] 已清除 {count} 条事件")
+            logger.debug("[BetterGI-Log] 已清除 %d 条事件", count)
             return event.plain_result(f"✅ 已清除 {count} 条事件记录")
 
         count = 10
@@ -355,27 +365,27 @@ class BetterGIPlugin(Star):
             count = int(arg)
 
         events = await self._event_store.get_recent(count)
-        logger.info(f"[BetterGI-Log] 获取到 {len(events)} 条事件")
+        logger.debug("[BetterGI-Log] 获取到 %d 条事件", len(events))
         text = EventStore.format_events(events)
         return event.plain_result(text)
 
     async def _handle_bind(self, event: AstrMessageEvent) -> MessageEventResult:
         umo = event.unified_msg_origin
-        logger.info(f"[BetterGI-Bind] 尝试绑定会话: {umo}")
+        logger.debug("[BetterGI-Bind] 尝试绑定会话: %s", umo)
 
         if umo in self._notify_umo:
-            logger.info("[BetterGI-Bind] 会话已存在，无需重复绑定")
+            logger.debug("[BetterGI-Bind] 会话已存在，无需重复绑定")
             return event.plain_result("✅ 当前会话已绑定，无需重复绑定")
 
         self._notify_umo.append(umo)
-        logger.info(f"[BetterGI-Bind] 已添加，当前绑定列表: {self._notify_umo}")
+        logger.debug("[BetterGI-Bind] 已添加，当前绑定列表: %s", self._notify_umo)
 
         try:
             self.config["notify"]["umo"] = self._notify_umo
             self.config.save_config()
-            logger.info("[BetterGI-Bind] 配置已保存")
+            logger.debug("[BetterGI-Bind] 配置已保存")
         except Exception as e:
-            logger.warning(f"[BetterGI] 保存绑定配置失败: {e}")
+            logger.warning("[BetterGI] 保存绑定配置失败: %s", e)
 
         return event.plain_result(
             f"✅ 已绑定当前会话为通知接收方\n"
@@ -385,7 +395,7 @@ class BetterGIPlugin(Star):
 
     async def _on_webhook_event(self, event_data: dict) -> None:
         """处理 BetterGI Webhook 事件。"""
-        logger.info(f"[BetterGI-Webhook] 收到事件数据: keys={list(event_data.keys())}")
+        logger.debug("[BetterGI-Webhook] 收到事件数据: keys=%s", list(event_data.keys()))
 
         await self._event_store.add(event_data)
 
@@ -395,19 +405,19 @@ class BetterGIPlugin(Star):
         timestamp = event_data.get("timestamp", "")
         screenshot = event_data.get("screenshot", "")
 
-        logger.info(f"[BetterGI-Webhook] 事件: {event_type} | result={result} | message={message}")
-        logger.info(f"[BetterGI-Webhook] screenshot: {'有(' + str(len(screenshot)) + '字符)' if screenshot else '无'}")
-        logger.info(f"[BetterGI-Webhook] 全部字段: send_to={event_data.get('send_to', '')}, timestamp={timestamp}")
+        logger.info("[BetterGI] Webhook 事件: %s | %s | %s", event_type, result, message)
+        logger.debug("[BetterGI-Webhook] screenshot: %s", f"有({len(screenshot)}字符)" if screenshot else "无")
+        logger.debug("[BetterGI-Webhook] 全部字段: send_to=%s, timestamp=%s", event_data.get("send_to", ""), timestamp)
 
         if not self._notify_umo:
             logger.warning("[BetterGI-Webhook] 无绑定会话，不转发通知")
             return
 
         if not self._should_notify(event_type):
-            logger.info(f"[BetterGI-Webhook] 事件 {event_type} 未启用通知，跳过")
+            logger.debug("[BetterGI-Webhook] 事件 %s 未启用通知，跳过", event_type)
             return
 
-        logger.info(f"[BetterGI-Webhook] 事件 {event_type} 已启用通知，开始转发")
+        logger.info("[BetterGI] 开始转发事件 %s", event_type)
         await self._send_notify(
             event_type, result, message, timestamp, screenshot
         )
@@ -416,10 +426,10 @@ class BetterGIPlugin(Star):
         events_cfg = self.config.get("notify", {}).get("events", {})
         config_key = self._event_map.get(event_type)
         if not config_key:
-            logger.info(f"[BetterGI-Notify] 事件 {event_type} 不在事件映射表中")
+            logger.debug("[BetterGI-Notify] 事件 %s 不在事件映射表中", event_type)
             return False
         enabled = events_cfg.get(config_key, False)
-        logger.info(f"[BetterGI-Notify] 事件 {event_type} -> config_key={config_key}, enabled={enabled}")
+        logger.debug("[BetterGI-Notify] 事件 %s -> config_key=%s, enabled=%s", event_type, config_key, enabled)
         return enabled
 
     async def _send_notify(
@@ -431,7 +441,10 @@ class BetterGIPlugin(Star):
         screenshot: str = "",
     ) -> None:
         """发送事件通知到所有绑定的会话。"""
-        logger.info(f"[BetterGI-Send] 开始发送通知: event={event_type}, umo_count={len(self._notify_umo)}, has_screenshot={bool(screenshot)}")
+        logger.debug(
+            "[BetterGI-Send] 开始: event=%s, umo_count=%d, has_screenshot=%s",
+            event_type, len(self._notify_umo), bool(screenshot),
+        )
 
         text = (
             f"📢 BetterGI 事件通知\n"
@@ -447,40 +460,38 @@ class BetterGIPlugin(Star):
             try:
                 image_data = base64.b64decode(screenshot)
                 data_dir = self._get_data_dir()
-                logger.info(f"[BetterGI-Send] data_dir={data_dir}, 图片数据={len(image_data)} 字节")
+                logger.debug("[BetterGI-Send] data_dir=%s, 图片数据=%d 字节", data_dir, len(image_data))
                 os.makedirs(data_dir, exist_ok=True)
                 fd, temp_path = tempfile.mkstemp(
                     suffix=".jpg", prefix="bettergi_", dir=data_dir
                 )
                 with os.fdopen(fd, "wb") as f:
                     f.write(image_data)
-                logger.info(
-                    f"[BetterGI-Send] 截图已保存: {temp_path} ({len(image_data)} 字节)"
-                )
-                logger.info(f"[BetterGI-Send] 文件存在: {os.path.exists(temp_path)}")
+                logger.debug("[BetterGI-Send] 截图已保存: %s (%d 字节)", temp_path, len(image_data))
+                logger.debug("[BetterGI-Send] 文件存在: %s", os.path.exists(temp_path))
             except Exception as e:
-                logger.error(f"[BetterGI-Send] 保存截图失败: {e}", exc_info=True)
+                logger.error("[BetterGI-Send] 保存截图失败: %s", e, exc_info=True)
                 temp_path = ""
         else:
-            logger.info("[BetterGI-Send] 无截图数据，仅发送文本")
+            logger.debug("[BetterGI-Send] 无截图数据，仅发送文本")
 
         for umo in self._notify_umo:
             try:
                 chain = MessageChain().message(text)
                 if temp_path:
                     chain = chain.file_image(temp_path)
-                    logger.info(f"[BetterGI-Send] 构建 MessageChain: text + file_image({temp_path})")
+                    logger.debug("[BetterGI-Send] 构建 MessageChain: text + file_image(%s)", temp_path)
                 else:
-                    logger.info("[BetterGI-Send] 构建 MessageChain: text only")
+                    logger.debug("[BetterGI-Send] 构建 MessageChain: text only")
                 await self.context.send_message(umo, chain)
-                logger.info(f"[BetterGI-Send] 通知已发送到 {umo} (含图片: {bool(temp_path)})")
+                logger.info("[BetterGI] 通知已发送到 %s (含图片: %s)", umo, bool(temp_path))
             except Exception as e:
-                logger.error(f"[BetterGI-Send] 发送通知到 {umo} 失败: {e}", exc_info=True)
+                logger.error("[BetterGI-Send] 发送通知到 %s 失败: %s", umo, e, exc_info=True)
 
         if temp_path and os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
-                logger.info(f"[BetterGI-Send] 临时文件已删除: {temp_path}")
+                logger.debug("[BetterGI-Send] 临时文件已删除: %s", temp_path)
             except Exception:
                 pass
 
@@ -488,18 +499,18 @@ class BetterGIPlugin(Star):
         """定时任务执行函数。"""
         scheduled = self.config.get("scheduled_task", {})
         index = scheduled.get("command_index", 1)
-        logger.info(f"[BetterGI-Sched] 定时任务触发: index={index}")
+        logger.info("[BetterGI] 定时任务触发: index=%d", index)
 
         args = self._get_command_at(index)
         if not args:
-            logger.error(f"[BetterGI-Sched] 无法找到第{index}个命令配置")
+            logger.error("[BetterGI-Sched] 无法找到第%d个命令配置", index)
             return
 
-        logger.info(f"[BetterGI-Sched] 定时任务执行: {' '.join(args)}")
+        logger.info("[BetterGI] 定时任务执行: %s", " ".join(args))
         result = await self._execute_command(args)
-        logger.info(f"[BetterGI-Sched] 定时任务结果: {result}")
+        logger.debug("[BetterGI-Sched] 定时任务结果: %s", result)
         if result and not result[0]:
-            logger.error(f"[BetterGI-Sched] 定时任务执行失败: {result[1]}")
+            logger.error("[BetterGI-Sched] 定时任务执行失败: %s", result[1])
 
     def _build_help_text(self) -> str:
         p = self._prefix
