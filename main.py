@@ -1,4 +1,6 @@
+import base64
 import os
+import tempfile
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
@@ -15,7 +17,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.5")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.6")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -382,14 +384,33 @@ class BetterGIPlugin(Star):
         if message:
             text += f"消息: {message}"
 
+        temp_path = ""
+        if screenshot:
+            try:
+                image_data = base64.b64decode(screenshot)
+                fd, temp_path = tempfile.mkstemp(
+                    suffix=".jpg", prefix="bettergi_", dir=self._get_data_dir()
+                )
+                with os.fdopen(fd, "wb") as f:
+                    f.write(image_data)
+            except Exception as e:
+                logger.error(f"[BetterGI] 保存截图失败: {e}")
+                temp_path = ""
+
         for umo in self._notify_umo:
             try:
                 chain = MessageChain().message(text)
-                if screenshot:
-                    chain = chain.base64_image(screenshot)
+                if temp_path:
+                    chain = chain.file_image(temp_path)
                 await self.context.send_message(umo, chain)
             except Exception as e:
                 logger.error(f"[BetterGI] 发送通知到 {umo} 失败: {e}")
+
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
 
     async def _run_scheduled_task(self) -> None:
         """定时任务执行函数。"""
