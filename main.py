@@ -15,7 +15,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.3")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.4")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -204,8 +204,11 @@ class BetterGIPlugin(Star):
         if arg in ("", "默认", "default"):
             args = self._get_command_at(1)
             if args:
-                yield event.plain_result(f"✅ 正在执行第1个命令: {' '.join(args)}")
-                await self._execute_command(args)
+                result = await self._execute_command(args)
+                if result and not result[0]:
+                    yield event.plain_result(f"❌ {result[1]}")
+                else:
+                    yield event.plain_result(f"✅ 正在执行第1个命令: {' '.join(args)}")
             else:
                 yield event.plain_result("❌ 无法解析第1个命令配置")
             return
@@ -225,10 +228,13 @@ class BetterGIPlugin(Star):
             index = int(arg)
             args = self._get_command_at(index)
             if args:
-                yield event.plain_result(
-                    f"✅ 正在执行第{index}个命令: {' '.join(args)}"
-                )
-                await self._execute_command(args)
+                result = await self._execute_command(args)
+                if result and not result[0]:
+                    yield event.plain_result(f"❌ {result[1]}")
+                else:
+                    yield event.plain_result(
+                        f"✅ 正在执行第{index}个命令: {' '.join(args)}"
+                    )
             else:
                 yield event.plain_result(
                     f"❌ 无效的序号，请输入 1-{len(commands)} 之间的数字"
@@ -243,16 +249,18 @@ class BetterGIPlugin(Star):
             f"发送 {self._prefix}{self._cmd_run[0]} 选择 查看可用命令"
         )
 
-    async def _execute_command(self, args: list[str]) -> None:
-        """执行命令的实际逻辑。"""
+    async def _execute_command(self, args: list[str]) -> tuple[bool, str] | None:
+        """执行命令的实际逻辑。返回 (成功, 消息) 或 None。"""
         ok, msg = await self._runner.check_env()
         if not ok:
             logger.error(f"[BetterGI] 环境检查失败: {msg}")
-            return
+            return False, f"环境检查失败: {msg}"
 
         success = await self._runner.run(args)
         if not success:
             logger.error(f"[BetterGI] 命令执行失败: {' '.join(args)}")
+            return False, "命令执行失败，请查看日志"
+        return True, "OK"
 
     async def _handle_stop(self, event: AstrMessageEvent):
         stopped = await self._runner.stop()
@@ -384,7 +392,9 @@ class BetterGIPlugin(Star):
             return
 
         logger.info(f"[BetterGI] 定时任务执行: {' '.join(args)}")
-        await self._execute_command(args)
+        result = await self._execute_command(args)
+        if result and not result[0]:
+            logger.error(f"[BetterGI] 定时任务执行失败: {result[1]}")
 
     def _build_help_text(self) -> str:
         p = self._prefix
