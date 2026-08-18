@@ -202,7 +202,7 @@ log_level: "INFO"
 
 ## 作者
 
-- [苏月晅](https://https://yuexuan6699.dpdns.org/)
+- [苏月晅](https://yuexuan6699.dpdns.org/)
 
 ## 许可证
 
