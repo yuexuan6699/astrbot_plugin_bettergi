@@ -17,7 +17,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.6")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.7")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -355,6 +355,9 @@ class BetterGIPlugin(Star):
 
         if self._notify_umo and self._should_notify(event_type):
             screenshot = event_data.get("screenshot", "")
+            logger.info(
+                f"[BetterGI] 截图字段: {'有(' + str(len(screenshot)) + '字符)' if screenshot else '无'}"
+            )
             await self._send_notify(
                 event_type, result, message, timestamp, screenshot
             )
@@ -388,11 +391,16 @@ class BetterGIPlugin(Star):
         if screenshot:
             try:
                 image_data = base64.b64decode(screenshot)
+                data_dir = self._get_data_dir()
+                os.makedirs(data_dir, exist_ok=True)
                 fd, temp_path = tempfile.mkstemp(
-                    suffix=".jpg", prefix="bettergi_", dir=self._get_data_dir()
+                    suffix=".jpg", prefix="bettergi_", dir=data_dir
                 )
                 with os.fdopen(fd, "wb") as f:
                     f.write(image_data)
+                logger.info(
+                    f"[BetterGI] 截图已保存: {temp_path} ({len(image_data)} 字节)"
+                )
             except Exception as e:
                 logger.error(f"[BetterGI] 保存截图失败: {e}")
                 temp_path = ""
@@ -403,6 +411,7 @@ class BetterGIPlugin(Star):
                 if temp_path:
                     chain = chain.file_image(temp_path)
                 await self.context.send_message(umo, chain)
+                logger.info(f"[BetterGI] 通知已发送到 {umo} (含图片: {bool(temp_path)})")
             except Exception as e:
                 logger.error(f"[BetterGI] 发送通知到 {umo} 失败: {e}")
 
