@@ -118,7 +118,7 @@
             "path": {
                 "description": "Webhook 路径",
                 "type": "string",
-                "default": "/bettergi/webhook",
+                "default": "/bettergi",
                 "hint": "BetterGI 中填写的 Webhook 地址路径，完整地址为 http://<IP>:<端口><路径>"
             },
             "token": {

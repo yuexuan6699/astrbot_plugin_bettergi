@@ -15,7 +15,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.0")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.1")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -110,9 +110,8 @@ class BetterGIPlugin(Star):
         config_name = entry.get("config_name", "")
         return build_command(template_key, config_name)
 
-    @filter.on_astrbot_loaded()
-    async def on_loaded(self):
-        """AstrBot 初始化完成后启动服务。"""
+    async def initialize(self):
+        """插件加载和热重载时启动服务。"""
         webhook_cfg = self.config.get("webhook", {})
         if webhook_cfg.get("enable", True):
             ok = await self._webhook_server.start()

@@ -21,7 +21,7 @@ class WebhookServer:
         self,
         host: str = "0.0.0.0",
         port: int = 8088,
-        path: str = "/bettergi/webhook",
+        path: str = "/bettergi",
         token: str = "",
     ):
         self._host = host
