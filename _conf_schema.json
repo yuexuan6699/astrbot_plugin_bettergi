@@ -56,39 +56,45 @@
             },
             "run": {
                 "description": "运行命令",
-                "type": "string",
-                "default": "运行",
-                "hint": "触发运行的命令名称，如 运行、run、启动"
+                "type": "list",
+                "items": {"type": "string"},
+                "default": ["运行"],
+                "hint": "触发运行的命令名称，可填多个如 运行、run、启动"
             },
             "status": {
                 "description": "状态命令",
-                "type": "string",
-                "default": "状态",
-                "hint": "触发状态查询的命令名称"
+                "type": "list",
+                "items": {"type": "string"},
+                "default": ["状态"],
+                "hint": "触发状态查询的命令名称，可填多个"
             },
             "stop": {
                 "description": "停止命令",
-                "type": "string",
-                "default": "停止",
-                "hint": "触发停止的命令名称"
+                "type": "list",
+                "items": {"type": "string"},
+                "default": ["停止"],
+                "hint": "触发停止的命令名称，可填多个"
             },
             "log": {
                 "description": "日志命令",
-                "type": "string",
-                "default": "日志",
-                "hint": "触发日志查询的命令名称"
+                "type": "list",
+                "items": {"type": "string"},
+                "default": ["日志"],
+                "hint": "触发日志查询的命令名称，可填多个"
             },
             "bind": {
                 "description": "绑定命令",
-                "type": "string",
-                "default": "绑定",
-                "hint": "触发会话绑定的命令名称"
+                "type": "list",
+                "items": {"type": "string"},
+                "default": ["绑定"],
+                "hint": "触发会话绑定的命令名称，可填多个"
             },
             "help": {
                 "description": "帮助命令",
-                "type": "string",
-                "default": "帮助",
-                "hint": "触发帮助信息的命令名称"
+                "type": "list",
+                "items": {"type": "string"},
+                "default": ["帮助"],
+                "hint": "触发帮助信息的命令名称，可填多个"
             }
         }
     },
@@ -135,10 +141,11 @@
         "hint": "Webhook 事件自动转发到的聊天会话",
         "items": {
             "umo": {
-                "description": "通知接收会话ID",
-                "type": "string",
-                "default": "",
-                "hint": "通过发送绑定命令自动设置，或手动填写 unified_msg_origin"
+                "description": "通知接收会话ID列表",
+                "type": "list",
+                "items": {"type": "string"},
+                "default": [],
+                "hint": "通过发送绑定命令自动添加（可绑定多个会话），或手动填写 unified_msg_origin"
             },
             "events": {
                 "description": "需要通知的事件类型",

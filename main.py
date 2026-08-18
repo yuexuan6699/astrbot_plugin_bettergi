@@ -15,7 +15,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.1")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.2")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -35,7 +35,11 @@ class BetterGIPlugin(Star):
         )
         self._webhook_server.set_handler(self._on_webhook_event)
 
-        self._notify_umo: str = config.get("notify", {}).get("umo", "")
+        raw_umo = config.get("notify", {}).get("umo", [])
+        if isinstance(raw_umo, str):
+            self._notify_umo: list[str] = [raw_umo] if raw_umo else []
+        else:
+            self._notify_umo = [str(u) for u in raw_umo] if raw_umo else []
         self._event_map: dict[str, str] = {
             "notify.test": "notify_test",
             "dragon.start": "dragon_start",
@@ -64,12 +68,19 @@ class BetterGIPlugin(Star):
     def _init_config(self) -> None:
         self._cmd_names = self.config.get("command_names", {})
         self._prefix = self._cmd_names.get("prefix", "better")
-        self._cmd_run = self._cmd_names.get("run", "运行")
-        self._cmd_status = self._cmd_names.get("status", "状态")
-        self._cmd_stop = self._cmd_names.get("stop", "停止")
-        self._cmd_log = self._cmd_names.get("log", "日志")
-        self._cmd_bind = self._cmd_names.get("bind", "绑定")
-        self._cmd_help = self._cmd_names.get("help", "帮助")
+
+        def _get_aliases(key: str, default: str) -> list[str]:
+            val = self._cmd_names.get(key, [default])
+            if isinstance(val, str):
+                return [val]
+            return [str(v) for v in val] if val else [default]
+
+        self._cmd_run = _get_aliases("run", "运行")
+        self._cmd_status = _get_aliases("status", "状态")
+        self._cmd_stop = _get_aliases("stop", "停止")
+        self._cmd_log = _get_aliases("log", "日志")
+        self._cmd_bind = _get_aliases("bind", "绑定")
+        self._cmd_help = _get_aliases("help", "帮助")
         self._debug = self.config.get("debug_log", False)
 
     def _get_data_dir(self) -> str:
@@ -99,6 +110,13 @@ class BetterGIPlugin(Star):
     def _get_commands(self) -> list[dict[str, Any]]:
         """获取配置的命令列表。"""
         return self.config.get("commands", [])
+
+    def _match_cmd(self, sub: str, aliases: list[str]) -> str | None:
+        """匹配命令别名，返回匹配到的别名（长别名优先），未匹配返回 None。"""
+        for alias in sorted(aliases, key=len, reverse=True):
+            if sub.startswith(alias):
+                return alias
+        return None
 
     def _get_command_at(self, index: int) -> list[str] | None:
         """根据序号获取命令参数。"""
@@ -142,22 +160,38 @@ class BetterGIPlugin(Star):
 
         event.stop_event()
 
-        if sub.startswith(self._cmd_run):
-            cmd_arg = sub[len(self._cmd_run) :].strip()
+        matched = self._match_cmd(sub, self._cmd_run)
+        if matched is not None:
+            cmd_arg = sub[len(matched) :].strip()
             async for result in self._handle_run(event, cmd_arg):
                 yield result
-        elif sub.startswith(self._cmd_status):
+            return
+
+        matched = self._match_cmd(sub, self._cmd_status)
+        if matched is not None:
             async for result in self._handle_status(event):
                 yield result
-        elif sub.startswith(self._cmd_stop):
+            return
+
+        matched = self._match_cmd(sub, self._cmd_stop)
+        if matched is not None:
             async for result in self._handle_stop(event):
                 yield result
-        elif sub.startswith(self._cmd_log):
-            cmd_arg = sub[len(self._cmd_log) :].strip()
+            return
+
+        matched = self._match_cmd(sub, self._cmd_log)
+        if matched is not None:
+            cmd_arg = sub[len(matched) :].strip()
             yield await self._handle_log(event, cmd_arg)
-        elif sub.startswith(self._cmd_bind):
+            return
+
+        matched = self._match_cmd(sub, self._cmd_bind)
+        if matched is not None:
             yield await self._handle_bind(event)
-        elif sub.startswith(self._cmd_help):
+            return
+
+        matched = self._match_cmd(sub, self._cmd_help)
+        if matched is not None:
             yield event.plain_result(self._build_help_text())
 
     async def _handle_run(self, event: AstrMessageEvent, arg: str):
@@ -183,7 +217,7 @@ class BetterGIPlugin(Star):
                 name = cmd.get("config_name", "未命名")
                 type_name = "一条龙" if key == "dragon" else "调度器"
                 msg_lines.append(f"{i}. [{type_name}] {name}")
-            msg_lines.append(f"\n发送 {self._prefix}{self._cmd_run} 序号 来执行")
+            msg_lines.append(f"\n发送 {self._prefix}{self._cmd_run[0]} 序号 来执行")
             yield event.plain_result("\n".join(msg_lines))
             return
 
@@ -206,7 +240,7 @@ class BetterGIPlugin(Star):
             return
 
         yield event.plain_result(
-            f"发送 {self._prefix}{self._cmd_run} 选择 查看可用命令"
+            f"发送 {self._prefix}{self._cmd_run[0]} 选择 查看可用命令"
         )
 
     async def _execute_command(self, args: list[str]) -> None:
@@ -259,7 +293,7 @@ class BetterGIPlugin(Star):
             lines.append(f"  上次执行: {sched_status['last_run_date']}")
 
         if self._notify_umo:
-            lines.append("🔹 通知绑定: 已绑定")
+            lines.append(f"🔹 通知绑定: 已绑定 {len(self._notify_umo)} 个会话")
 
         yield event.plain_result("\n".join(lines))
 
@@ -280,16 +314,22 @@ class BetterGIPlugin(Star):
 
     async def _handle_bind(self, event: AstrMessageEvent) -> MessageEventResult:
         umo = event.unified_msg_origin
-        self._notify_umo = umo
+
+        if umo in self._notify_umo:
+            return event.plain_result("✅ 当前会话已绑定，无需重复绑定")
+
+        self._notify_umo.append(umo)
 
         try:
-            self.config["notify"]["umo"] = umo
+            self.config["notify"]["umo"] = self._notify_umo
             self.config.save_config()
         except Exception as e:
             logger.warning(f"[BetterGI] 保存绑定配置失败: {e}")
 
         return event.plain_result(
-            "✅ 已绑定当前会话为通知接收方\nBetterGI 事件将自动转发到此处"
+            f"✅ 已绑定当前会话为通知接收方\n"
+            f"BetterGI 事件将自动转发到此处\n"
+            f"当前共绑定 {len(self._notify_umo)} 个会话"
         )
 
     async def _on_webhook_event(self, event_data: dict) -> None:
@@ -316,21 +356,22 @@ class BetterGIPlugin(Star):
     async def _send_notify(
         self, event_type: str, result: str, message: str, timestamp: str
     ) -> None:
-        """发送事件通知到绑定的会话。"""
-        try:
-            text = (
-                f"📢 BetterGI 事件通知\n"
-                f"事件: {event_type}\n"
-                f"结果: {result}\n"
-                f"时间: {timestamp}\n"
-            )
-            if message:
-                text += f"消息: {message}"
+        """发送事件通知到所有绑定的会话。"""
+        text = (
+            f"📢 BetterGI 事件通知\n"
+            f"事件: {event_type}\n"
+            f"结果: {result}\n"
+            f"时间: {timestamp}\n"
+        )
+        if message:
+            text += f"消息: {message}"
 
-            chain = MessageChain().message(text)
-            await self.context.send_message(self._notify_umo, chain)
-        except Exception as e:
-            logger.error(f"[BetterGI] 发送通知失败: {e}")
+        chain = MessageChain().message(text)
+        for umo in self._notify_umo:
+            try:
+                await self.context.send_message(umo, chain)
+            except Exception as e:
+                logger.error(f"[BetterGI] 发送通知到 {umo} 失败: {e}")
 
     async def _run_scheduled_task(self) -> None:
         """定时任务执行函数。"""
@@ -347,18 +388,28 @@ class BetterGIPlugin(Star):
 
     def _build_help_text(self) -> str:
         p = self._prefix
+
+        def _alias_str(aliases: list[str]) -> str:
+            return "/".join(aliases) if aliases else ""
+
+        run = _alias_str(self._cmd_run)
+        status = _alias_str(self._cmd_status)
+        stop = _alias_str(self._cmd_stop)
+        log = _alias_str(self._cmd_log)
+        bind = _alias_str(self._cmd_bind)
+        help_cmd = _alias_str(self._cmd_help)
         return (
             f"BetterGI 远程控制插件 使用帮助\n\n"
             f"📌 命令列表（前缀: {p}）：\n"
-            f"  {p}{self._cmd_run}        - 运行第1个命令\n"
-            f"  {p}{self._cmd_run} 选择   - 查看可用命令列表\n"
-            f"  {p}{self._cmd_run} 序号   - 运行指定序号的命令\n"
-            f"  {p}{self._cmd_status}      - 查看运行状态\n"
-            f"  {p}{self._cmd_stop}        - 停止当前任务\n"
-            f"  {p}{self._cmd_log}        - 查看最近事件日志\n"
-            f"  {p}{self._cmd_log} 清除   - 清除事件记录\n"
-            f"  {p}{self._cmd_bind}        - 绑定通知会话\n"
-            f"  {p}{self._cmd_help}        - 显示此帮助\n\n"
+            f"  {p}{run}        - 运行第1个命令\n"
+            f"  {p}{run} 选择   - 查看可用命令列表\n"
+            f"  {p}{run} 序号   - 运行指定序号的命令\n"
+            f"  {p}{status}      - 查看运行状态\n"
+            f"  {p}{stop}        - 停止当前任务\n"
+            f"  {p}{log}        - 查看最近事件日志\n"
+            f"  {p}{log} 清除   - 清除事件记录\n"
+            f"  {p}{bind}        - 绑定通知会话\n"
+            f"  {p}{help_cmd}        - 显示此帮助\n\n"
             f"📌 Webhook 配置：\n"
             f"  在 BetterGI 设置中配置 Webhook 地址为：\n"
             f"  {self._webhook_server.webhook_url}\n\n"
