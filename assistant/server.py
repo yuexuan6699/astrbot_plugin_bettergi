@@ -1,102 +1,53 @@
-"""BetterGI 辅助程序 - 分离式模式
+"""BetterGI 远程辅助程序（客户端模式）。
 
-运行在 BetterGI 所在电脑上，提供 HTTP API 供远程 AstrBot 插件调用。
-所有配置从同目录下的 config.yaml 读取。
-
-用法:
-    直接运行: python server.py
-    后台运行: pythonw server.py
-    开机自启: 通过 运行功能.bat 注册 Windows 计划任务
+辅助程序主动连接到 AstrBot 主端口的 SSE 端点，
+接收指令执行 BetterGI，执行完成后上报结果。
+无需开放任何端口。
 """
 
-import asyncio
+import argparse
+import json
 import logging
 import os
+import subprocess
 import sys
+import time
+from typing import Any
 
+import httpx
 import psutil
-import uvicorn
 import yaml
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_CONFIG_PATH = os.path.join(_SCRIPT_DIR, "config.yaml")
-_LOG_PATH = os.path.join(_SCRIPT_DIR, "assistant.log")
-
-app = FastAPI(title="BetterGI Assistant", version="2.0.0")
-
-_config: dict = {}
-_process: asyncio.subprocess.Process | None = None
-_current_command: str = ""
-_logger = logging.getLogger("bettergi-assistant")
 
 
-class RunRequest(BaseModel):
-    args: list[str] = []
-    token: str = ""
+def setup_logging(log_level: str = "INFO") -> None:
+    """配置日志输出到文件和控制台。"""
+    log_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file = os.path.join(log_dir, "assistant.log")
 
-
-class StopRequest(BaseModel):
-    token: str = ""
-
-
-def _setup_logging(level: str = "INFO") -> None:
-    """配置日志，同时输出到文件和控制台。"""
-    log_level = getattr(logging, level.upper(), logging.INFO)
-
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s",
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
     )
 
-    file_handler = logging.FileHandler(_LOG_PATH, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(log_level)
 
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    root_logger.addHandler(file_handler)
-
-    if sys.stdout:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        root_logger.addHandler(console_handler)
-
-
-def _load_config() -> dict:
-    """从 config.yaml 加载配置。"""
-    if not os.path.exists(_CONFIG_PATH):
-        print(f"错误: 配置文件不存在: {_CONFIG_PATH}")
-        print("请确保 config.yaml 与 server.py 在同一目录下")
+def load_config(config_path: str) -> dict[str, Any]:
+    """加载配置文件。"""
+    if not os.path.exists(config_path):
+        print(f"配置文件不存在: {config_path}")
         sys.exit(1)
 
-    try:
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except yaml.YAMLError as e:
-        print(f"错误: 配置文件格式不正确: {e}")
-        sys.exit(1)
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
-def _verify_token(token: str | None) -> None:
-    expected = _config.get("token", "")
-    if expected and token != expected:
-        raise HTTPException(status_code=401, detail="unauthorized")
-
-
-_ALLOWED_PREFIXES = ("--startOneDragon", "--startGroups")
-
-
-def _validate_args(args: list[str]) -> bool:
-    """校验命令参数，只允许 --startOneDragon 或 --startGroups 开头。"""
-    return bool(args) and args[0] in _ALLOWED_PREFIXES
-
-
-def _find_executable() -> str | None:
-    bettergi_dir = _config.get("bettergi_dir", "")
-    if not bettergi_dir or not os.path.exists(bettergi_dir):
-        return None
+def find_bettergi_exe(bettergi_dir: str) -> str | None:
+    """查找 BetterGI 可执行文件。"""
     for name in ("BetterGI.exe", "BetterGI.bat", "BetterGI.cmd"):
         path = os.path.join(bettergi_dir, name)
         if os.path.exists(path):
@@ -104,146 +55,245 @@ def _find_executable() -> str | None:
     return None
 
 
-@app.post("/api/run")
-async def run_command(req: RunRequest):
-    global _process, _current_command
+def is_bettergi_running(bettergi_dir: str) -> tuple[bool, int | None]:
+    """检查 BetterGI 是否正在运行。"""
+    exe_path = find_bettergi_exe(bettergi_dir)
+    if not exe_path:
+        return False, None
 
-    _verify_token(req.token)
+    exe_name = os.path.basename(exe_path).lower()
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            if proc.info["name"].lower() == exe_name:
+                return True, proc.info["pid"]
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False, None
 
-    if not _validate_args(req.args):
-        _logger.warning(f"拒绝执行非法命令: {req.args}")
-        return {
-            "success": False,
-            "error": "命令必须以 --startOneDragon 或 --startGroups 开头",
-        }
 
-    if _process and _process.returncode is None:
-        return {"success": False, "error": "已有任务正在运行"}
+def run_bettergi(bettergi_dir: str, args: list[str]) -> tuple[bool, str]:
+    """执行 BetterGI 命令。"""
+    exe_path = find_bettergi_exe(bettergi_dir)
+    if not exe_path:
+        return False, f"未找到 BetterGI 可执行文件: {bettergi_dir}"
 
-    exe = _find_executable()
-    if not exe:
-        return {
-            "success": False,
-            "error": f"未找到 BetterGI.exe: {_config.get('bettergi_dir', '')}",
-        }
+    # 安全检查：命令必须以 --startOneDragon 或 --startGroups 开头
+    if not args or args[0] not in ("--startOneDragon", "--startGroups"):
+        return False, "命令必须以 --startOneDragon 或 --startGroups 开头"
 
-    cmd = [exe] + req.args
-    _current_command = " ".join(req.args)
-    _logger.info(f"执行命令: {' '.join(cmd)}")
+    cmd = [exe_path] + args
+    logging.info("执行命令: %s", " ".join(cmd))
 
     try:
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
         env.pop("PYTHONHOME", None)
 
-        _process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=_config["bettergi_dir"],
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # 使用 Popen 非阻塞执行
+        proc = subprocess.Popen(
+            cmd,
+            cwd=bettergi_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=env,
         )
-        _logger.info(f"进程已启动 (PID: {_process.pid})")
-        return {"success": True, "pid": _process.pid}
+        logging.info("BetterGI 已启动，PID: %d", proc.pid)
+        return True, f"已启动 (PID: {proc.pid})"
+    except FileNotFoundError:
+        return False, f"可执行文件不存在: {exe_path}"
+    except PermissionError:
+        return False, "权限不足，可能需要管理员权限"
     except Exception as e:
-        _current_command = ""
-        _logger.error(f"启动进程失败: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return False, f"启动失败: {e}"
 
 
-@app.post("/api/stop")
-async def stop_command(req: StopRequest):
-    global _process, _current_command
-
-    _verify_token(req.token)
-
-    if not _process or _process.returncode is not None:
-        _process = None
-        _current_command = ""
-        return {"success": False, "error": "没有正在运行的任务"}
-
-    pid = _process.pid
-    _logger.info(f"正在停止进程 PID: {pid}")
+def stop_bettergi(bettergi_dir: str) -> tuple[bool, str]:
+    """停止 BetterGI 进程。"""
+    running, pid = is_bettergi_running(bettergi_dir)
+    if not running:
+        return True, "未运行"
 
     try:
-        _process.terminate()
+        proc = psutil.Process(pid)
+        proc.terminate()
         try:
-            await asyncio.wait_for(_process.wait(), timeout=5)
-            _logger.info(f"进程 {pid} 已正常终止")
-        except asyncio.TimeoutError:
-            _logger.warning(f"进程 {pid} 超时，强制终止")
-            _process.kill()
-            await asyncio.wait_for(_process.wait(), timeout=3)
-
-        _kill_child_processes(pid)
+            proc.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+        logging.info("BetterGI 已停止，PID: %d", pid)
+        return True, "已停止"
+    except psutil.NoSuchProcess:
+        return True, "进程不存在"
     except Exception as e:
-        _logger.error(f"停止进程失败: {e}")
-        return {"success": False, "error": str(e)}
-
-    _process = None
-    _current_command = ""
-    return {"success": True}
+        return False, f"停止失败: {e}"
 
 
-@app.get("/api/status")
-async def get_status(token: str | None = None):
-    _verify_token(token)
-
-    running = _process is not None and _process.returncode is None
-    return {
-        "is_running": running,
-        "current_command": _current_command,
-        "pid": _process.pid if _process and running else None,
-        "bettergi_dir": _config.get("bettergi_dir", ""),
-        "bettergi_found": _find_executable() is not None,
+def report_result(
+    astrbot_url: str, token: str, task_id: str, success: bool, message: str
+) -> bool:
+    """上报执行结果到 AstrBot。"""
+    url = f"{astrbot_url.rstrip('/')}/api/v1/plugins/extensions/bettergi/remote/result"
+    payload = {
+        "task_id": task_id,
+        "success": success,
+        "message": message,
     }
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        url += f"?token={token}"
 
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "bettergi-assistant"}
-
-
-def _kill_child_processes(pid: int) -> None:
     try:
-        parent = psutil.Process(pid)
-        for child in parent.children(recursive=True):
-            try:
-                child.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        pass
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                logging.debug("结果上报成功: task_id=%s", task_id)
+                return True
+            logging.warning("结果上报失败: status=%d, body=%s", resp.status_code, resp.text)
+            return False
+    except Exception as e:
+        logging.error("结果上报异常: %s", e)
+        return False
 
 
-def main():
-    global _config
+def sse_connect(astrbot_url: str, token: str, bettergi_dir: str) -> None:
+    """连接 SSE 端点并处理指令。"""
+    url = f"{astrbot_url.rstrip('/')}/api/v1/plugins/extensions/bettergi/remote/connect"
+    if token:
+        url += f"?token={token}"
 
-    _config = _load_config()
+    logging.info("连接 SSE 端点: %s", url)
 
-    log_level = _config.get("log_level", "INFO")
-    _setup_logging(log_level)
+    while True:
+        try:
+            with httpx.stream("GET", url, timeout=None) as resp:
+                if resp.status_code != 200:
+                    logging.error("连接失败: HTTP %d - %s", resp.status_code, resp.text)
+                    time.sleep(5)
+                    continue
 
-    host = _config.get("host", "0.0.0.0")
-    port = _config.get("port", 9099)
-    bettergi_dir = _config.get("bettergi_dir", "")
-    token = _config.get("token", "")
+                logging.info("已连接到 AstrBot，等待指令...")
 
-    _logger.info("=" * 50)
-    _logger.info("BetterGI 辅助程序启动")
-    _logger.info(f"  监听: {host}:{port}")
-    _logger.info(f"  BetterGI 目录: {bettergi_dir or '未指定'}")
-    _logger.info(f"  令牌: {'已设置' if token else '未设置'}")
-    _logger.info(f"  日志文件: {_LOG_PATH}")
-    _logger.info("=" * 50)
+                event_type = ""
+                data_buffer = ""
+
+                for line in resp.iter_lines():
+                    if not line:
+                        # 空行表示事件结束
+                        if event_type and data_buffer:
+                            _handle_event(
+                                event_type, data_buffer, bettergi_dir,
+                                astrbot_url, token,
+                            )
+                        event_type = ""
+                        data_buffer = ""
+                        continue
+
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data_buffer += line[5:].strip()
+
+        except httpx.ConnectError as e:
+            logging.error("连接失败: %s，5秒后重试...", e)
+            time.sleep(5)
+        except Exception as e:
+            logging.error("连接异常: %s，5秒后重连...", e, exc_info=True)
+            time.sleep(5)
+
+
+def _handle_event(
+    event_type: str,
+    data: str,
+    bettergi_dir: str,
+    astrbot_url: str,
+    token: str,
+) -> None:
+    """处理 SSE 事件。"""
+    if event_type == "connected":
+        logging.info("连接确认成功")
+        return
+
+    if event_type == "error":
+        logging.error("收到错误事件: %s", data)
+        return
+
+    if event_type != "command":
+        logging.debug("忽略未知事件: %s", event_type)
+        return
+
+    try:
+        cmd_data = json.loads(data)
+    except json.JSONDecodeError:
+        logging.error("命令解析失败: %s", data)
+        return
+
+    cmd_type = cmd_data.get("type", "")
+    task_id = cmd_data.get("task_id", "")
+
+    logging.info("收到指令: type=%s, task_id=%s", cmd_type, task_id)
+
+    if cmd_type == "run":
+        args = cmd_data.get("args", [])
+        success, message = run_bettergi(bettergi_dir, args)
+        report_result(astrbot_url, token, task_id, success, message)
+
+    elif cmd_type == "stop":
+        success, message = stop_bettergi(bettergi_dir)
+        report_result(astrbot_url, token, task_id, success, message)
+
+    else:
+        logging.warning("未知命令类型: %s", cmd_type)
+        report_result(astrbot_url, token, task_id, False, f"未知命令: {cmd_type}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="BetterGI 远程辅助程序（客户端模式）")
+    parser.add_argument(
+        "-c", "--config",
+        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml"),
+        help="配置文件路径",
+    )
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    setup_logging(config.get("log_level", "INFO"))
+
+    astrbot_url = config.get("astrbot_url", "")
+    bettergi_dir = config.get("bettergi_dir", "")
+    token = config.get("token", "")
+
+    if not astrbot_url:
+        logging.error("配置错误: astrbot_url 不能为空")
+        sys.exit(1)
 
     if not bettergi_dir:
-        _logger.warning("未配置 bettergi_dir，运行命令时将失败")
+        logging.error("配置错误: bettergi_dir 不能为空")
+        sys.exit(1)
 
-    if not _find_executable() and bettergi_dir:
-        _logger.warning(f"在 {bettergi_dir} 中未找到 BetterGI.exe，请检查路径")
+    if not os.path.exists(bettergi_dir):
+        logging.error("BetterGI 目录不存在: %s", bettergi_dir)
+        sys.exit(1)
 
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    exe = find_bettergi_exe(bettergi_dir)
+    if not exe:
+        logging.error("未找到 BetterGI 可执行文件: %s", bettergi_dir)
+        sys.exit(1)
+
+    logging.info("=" * 50)
+    logging.info("BetterGI 远程辅助程序启动")
+    logging.info("模式: 客户端（主动连接 AstrBot）")
+    logging.info("AstrBot 地址: %s", astrbot_url)
+    logging.info("BetterGI 目录: %s", bettergi_dir)
+    logging.info("可执行文件: %s", exe)
+    logging.info("令牌: %s", "已设置" if token else "未设置")
+    logging.info("=" * 50)
+
+    try:
+        sse_connect(astrbot_url, token, bettergi_dir)
+    except KeyboardInterrupt:
+        logging.info("用户中断，正在退出...")
 
 
 if __name__ == "__main__":

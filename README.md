@@ -5,11 +5,13 @@ AstrBot 插件，用于远程控制 [BetterGI（更好的原神）](https://www.
 ## 功能特性
 
 - **本地/远程双模式** - 通过配置切换，支持同设备直接执行或跨设备远程控制
-- **Webhook 事件通知** - 接收 BetterGI 事件并自动转发到聊天会话
+- **Webhook 事件通知** - 接收 BetterGI 事件并自动转发到聊天会话（复用 AstrBot 主端口，无需额外端口）
 - **任务完成检测** - 基于 BetterGI Webhook 的 `dragon.end`/`group.end` 事件
 - **定时任务** - 每天定时自动执行命令
-- **命令名称自定义** - 每个命令的触发词均可配置
+- **命令名称自定义** - 每个命令的触发词均可配置，支持多个别名
 - **简化配置** - 命令分为"一条龙"和"调度器"模板，只需填配置名
+- **多会话通知** - 支持绑定多个聊天会话接收事件通知
+- **零端口远程控制** - 远程模式下，辅助程序主动连接 AstrBot，BetterGI 所在电脑无需开放任何端口
 
 ## 应用项目
 
@@ -21,22 +23,36 @@ AstrBot 插件，用于远程控制 [BetterGI（更好的原神）](https://www.
 ### 本地模式（单插件式）
 
 AstrBot 和 BetterGI 在同一设备，插件直接通过子进程执行 `BetterGI.exe` 命令。
-
-### 远程模式（分离式）
-
-AstrBot 和 BetterGI 在不同设备。需要在 BetterGI 所在电脑上运行辅助程序（`assistant/server.py`），插件通过网络调用辅助程序 API 来远程控制 BetterGI。
+Webhook 事件通过 AstrBot 主端口接收。
 
 ```
-┌─────────────┐         HTTP          ┌──────────────┐
-│   AstrBot   │  ←──────────────────→ │   辅助程序    │
-│   (插件)     │   run/stop/status     │  (FastAPI)   │
-└─────────────┘                       └──────┬───────┘
-      ↑                                      │
-      │ Webhook 事件推送                      │ subprocess
-      │ (BetterGI → 插件HTTP服务器)           │
-      │                              ┌───────▼───────┐
-      └──────────────────────────────│   BetterGI    │
-                                     └───────────────┘
+┌─────────────┐
+│   AstrBot   │
+│   (插件)     │ ←── Webhook ── BetterGI
+└─────────────┘
+      │
+      └── 子进程 ──→ BetterGI.exe
+```
+
+### 远程模式（分离式，零端口）
+
+AstrBot 和 BetterGI 在不同设备。辅助程序运行在 BetterGI 所在电脑上，
+**主动连接**到 AstrBot 的 SSE 端点，等待指令。BetterGI 电脑无需开放任何端口。
+
+```
+┌─────────────┐
+│   AstrBot   │
+│   (插件)     │ ←── Webhook ── BetterGI
+└──────┬──────┘
+       │ SSE (指令下发) / HTTP POST (结果上报)
+       │ （复用 AstrBot 主端口）
+┌──────▼──────┐
+│  辅助程序    │ （客户端模式，主动连接，不监听端口）
+└──────┬──────┘
+       │ 子进程
+┌──────▼──────┐
+│   BetterGI   │
+└─────────────┘
 ```
 
 ## 配置说明
@@ -57,46 +73,55 @@ AstrBot 和 BetterGI 在不同设备。需要在 BetterGI 所在电脑上运行�
 
 ### 命令名称自定义
 
+所有命令均支持配置多个别名（列表形式）：
+
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | `command_names.prefix` | 命令前缀 | `better` |
-| `command_names.run` | 运行命令名 | `运行` |
-| `command_names.status` | 状态命令名 | `状态` |
-| `command_names.stop` | 停止命令名 | `停止` |
-| `command_names.log` | 日志命令名 | `日志` |
-| `command_names.bind` | 绑定命令名 | `绑定` |
-| `command_names.help` | 帮助命令名 | `帮助` |
+| `command_names.run` | 运行命令名 | `["运行"]` |
+| `command_names.status` | 状态命令名 | `["状态"]` |
+| `command_names.stop` | 停止命令名 | `["停止"]` |
+| `command_names.log` | 日志命令名 | `["日志"]` |
+| `command_names.bind` | 绑定命令名 | `["绑定"]` |
+| `command_names.help` | 帮助命令名 | `["帮助"]` |
 
 ### Webhook 配置
+
+Webhook 复用 AstrBot 主端口，无需额外开端口。
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | `webhook.enable` | 启用 Webhook 接收 | `true` |
-| `webhook.host` | 监听地址 | `0.0.0.0` |
-| `webhook.port` | 监听端口 | `8088` |
-| `webhook.path` | Webhook 路径 | `/bettergi/webhook` |
+| `webhook.path` | Webhook 路径后缀 | `/webhook` |
 | `webhook.token` | 验证令牌（可选） | `""` |
+
+完整地址格式：`http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi/webhook`
 
 ### 定时任务
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | `scheduled_task.enable` | 启用定时任务 | `false` |
-| `scheduled_task.run_time` | 执行时间 (HH:MM) | `04:00` |
+| `scheduled_task.run_hour` | 执行时间 - 小时 (0-23) | `4` |
+| `scheduled_task.run_minute` | 执行时间 - 分钟 (0-59) | `0` |
 | `scheduled_task.command_index` | 执行的命令序号 | `1` |
 
 ### 远程模式配置
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `remote.url` | 辅助程序地址 | `http://127.0.0.1:9099` |
 | `remote.token` | 认证令牌 | `""` |
+
+辅助程序主动连接 AstrBot，无需在插件配置辅助程序地址。
+只需在辅助程序的 `config.yaml` 中填写 AstrBot 地址和相同的 token。
 
 ### 权限配置
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `better_master` | 有权限的用户ID列表 | `[]`（所有人可用） |
+| `better_master` | 额外授权用户ID列表 | `[]`（仅管理员可用） |
+
+AstrBot 全局管理员（`admins_id`）自动拥有权限，无需在此列表中。
 
 ## 使用方法
 
@@ -114,34 +139,45 @@ AstrBot 和 BetterGI 在不同设备。需要在 BetterGI 所在电脑上运行�
 | `better日志` | 查看最近10条事件 |
 | `better日志 20` | 查看最近20条事件 |
 | `better日志 清除` | 清除事件记录 |
-| `better绑定` | 绑定当前会话为通知接收方 |
+| `better绑定` | 绑定当前会话为通知接收方（可绑定多个） |
 | `better帮助` | 显示帮助信息 |
 
 ### Webhook 配置
 
-1. 在插件配置中设置 Webhook 端口和路径
-2. 启动插件后，查看日志获取 Webhook 地址
+1. 在插件配置中设置 Webhook 路径（默认 `/webhook` 即可）
+2. 启动插件后，查看日志获取完整 Webhook 地址
 3. 在 BetterGI 设置 → 通知渠道 → Webhook 中填入地址
 
-完整地址格式：`http://<AstrBot所在IP>:<端口><路径>`
+完整地址格式：`http://<AstrBot所在IP>:<端口>/api/v1/plugins/extensions/bettergi/webhook`
 
-例如：`http://192.168.1.100:8088/bettergi/webhook`
+例如：`http://192.168.1.100:6185/api/v1/plugins/extensions/bettergi/webhook`
 
 ### 事件类型
 
-BetterGI 支持的 Webhook 事件类型：
+BetterGI 支持的 Webhook 事件类型（可在配置中勾选需要通知的事件）：
 
-| 事件 | 说明 |
-|------|------|
-| `dragon.start` / `dragon.end` | 一条龙启动/结束 |
-| `group.start` / `group.end` | 配置组启动/结束 |
-| `task.cancel` / `task.error` | 任务取消/错误 |
-| `domain.start` / `domain.end` | 自动秘境启动/结束 |
-| `tcg.start` / `tcg.end` | 七圣召唤启动/结束 |
+| 事件 | 说明 | 默认启用 |
+|------|------|----------|
+| `notify.test` | 测试通知 | 否 |
+| `dragon.start` / `dragon.end` | 一条龙启动/结束 | 是 |
+| `group.start` / `group.end` | 配置组启动/结束 | 是 |
+| `task.cancel` / `task.error` | 任务取消/错误 | 是 |
+| `domain.start` / `domain.end` / `domain.reward` / `domain.retry` | 自动秘境相关 | 是 |
+| `tcg.start` / `tcg.end` | 七圣召唤启动/结束 | 是 |
+| `album.start` / `album.end` / `album.error` | 自动音游相关 | 是 |
+| `autoeat.start` / `autoeat.end` / `autoeat.info` | 自动吃药 | 是 |
+| `daily.reward` | 每日奖励状态 | 是 |
+| `js.custom` / `js.error` | JS自定义/错误 | 是 |
 
 完整事件列表请参考 [BetterGI Webhook 文档](https://www.bettergi.com/dev/webhook.html)
 
 ## 远程模式使用
+
+### 特点
+
+- **零端口** - BetterGI 所在电脑无需开放任何端口
+- **主动连接** - 辅助程序主动连接到 AstrBot，断线自动重连
+- **安全** - 支持令牌验证，只允许执行指定命令
 
 ### 1. 安装辅助程序依赖
 
@@ -154,13 +190,20 @@ pip install -r requirements.txt
 
 ### 2. 配置 config.yaml
 
-编辑 `assistant/config.yaml`，填写 BetterGI 安装目录和认证令牌：
+编辑 `assistant/config.yaml`：
 
 ```yaml
-host: "0.0.0.0"
-port: 9099
+# AstrBot 的访问地址（必填）
+# 例如: http://192.168.1.100:6185
+astrbot_url: "http://192.168.1.100:6185"
+
+# BetterGI 安装目录（必填）
 bettergi_dir: "D:\\BetterGI"
+
+# 认证令牌（与插件配置保持一致）
 token: "your-secret-token"
+
+# 日志级别
 log_level: "INFO"
 ```
 
@@ -170,33 +213,33 @@ log_level: "INFO"
 
 | 选项 | 说明 |
 |------|------|
-| 1. 启动辅助程序 | 前台运行，可看到日志输出，Ctrl+C 停止 |
+| 1. 启动辅助程序（前台） | 前台运行，可看到日志输出，Ctrl+C 停止 |
 | 2. 注册开机自启 | 创建 Windows 计划任务，登录时自动后台运行 |
 | 3. 取消开机自启 | 删除计划任务 |
 | 4. 查看自启状态 | 查看计划任务是否已注册 |
-| 5. 查看运行状态 | 检查辅助程序是否正在运行 |
+| 5. 测试连接 AstrBot | 检查是否能连接到 AstrBot |
 | 6. 退出 | 退出菜单 |
 
 ### 4. 配置插件
 
 在 AstrBot 插件配置中：
 - `mode` 设为 `remote`
-- `remote.url` 填入辅助程序地址（如 `http://192.168.1.200:9099`）
 - `remote.token` 填入与 config.yaml 中一致的令牌
+
+### 5. Webhook 配置
+
+远程模式下 Webhook 仍然由 AstrBot 插件接收，BetterGI 直接推送到 AstrBot 地址。
 
 ### 日志
 
-辅助程序运行日志保存在 `assistant/assistant.log`，包含所有 API 调用和错误信息。
+辅助程序运行日志保存在 `assistant/assistant.log`，包含所有连接状态和命令执行记录。
 
 ## 安装和依赖
 
-插件依赖（自动安装）：
-- aiohttp >= 3.8.0
-- psutil >= 5.9.0
+插件无额外依赖（Webhook 和远程控制均复用 AstrBot 主端口）。
 
 辅助程序依赖（远程模式，手动安装）：
-- fastapi >= 0.100.0
-- uvicorn >= 0.23.0
+- httpx >= 0.24.0
 - psutil >= 5.9.0
 - pyyaml >= 6.0
 

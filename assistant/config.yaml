@@ -1,26 +1,19 @@
-# BetterGI 辅助程序配置文件
-# 修改后需重启辅助程序生效
+# ============================================================
+# BetterGI 远程辅助程序配置（客户端模式）
+# ============================================================
+# 辅助程序主动连接到 AstrBot，无需开放任何端口。
+# 只需填写 AstrBot 的访问地址即可。
 
-# HTTP 监听地址
-# 0.0.0.0 表示监听所有网络接口（允许远程访问）
-# 127.0.0.1 表示仅监听本机
-# 例如: "192.168.1.2" 可以仅监听指定的局域网 IP 地址，建议不配置令牌的这么填写
-host: "0.0.0.0"
+# AstrBot 的访问地址（必填）
+# 辅助程序会连接到这个地址的 SSE 端点等待指令
+# 例如: http://192.168.1.100:6185
+astrbot_url: "http://127.0.0.1:6185"
 
-# HTTP 监听端口
-# 需与 AstrBot 插件配置中 remote.url 的端口一致
-port: 9099
+# BetterGI 安装目录（必填）
+bettergi_dir: "D:\\BetterGI"
 
-# BetterGI 安装目录
-# BetterGI.exe 所在目录的完整路径
-# 例如: "D:\\BetterGI" 或 "D:/BetterGI"
-bettergi_dir: ""
+# 认证令牌（可选，与插件配置保持一致）
+token: "your-secret-token"
 
-# 认证令牌
-# 与 AstrBot 插件配置中的远程模式配置（remote.token）保持一致
-# 留空则不验证，建议配置
-token: ""
-
-# 日志级别
-# 可选: DEBUG, INFO, WARNING, ERROR
+# 日志级别: DEBUG, INFO, WARNING, ERROR
 log_level: "INFO"

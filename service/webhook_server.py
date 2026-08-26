@@ -1,11 +1,9 @@
-import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from aiohttp import web
-
 try:
     from astrbot.api import logger
+    from astrbot.api.web import error_response, json_response, request
 except ImportError:
     import logging
 
@@ -13,34 +11,38 @@ except ImportError:
 
 EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
+PLUGIN_NAME = "bettergi"
+
 
 class WebhookServer:
-    """接收 BetterGI Webhook 事件通知的 HTTP 服务器。"""
+    """接收 BetterGI Webhook 事件通知（复用 AstrBot 主端口）。
+
+    通过 context.register_web_api() 注册路由，不再单独开端口。
+    """
 
     def __init__(
         self,
-        host: str = "0.0.0.0",
-        port: int = 8088,
-        path: str = "/bettergi",
+        path: str = "/webhook",
         token: str = "",
     ):
-        self._host = host
-        self._port = port
-        self._path = path if path.startswith("/") else f"/{path}"
+        # 内部注册路径加上插件名前缀，如 /bettergi/webhook
+        self._internal_path = (
+            f"/{PLUGIN_NAME}/{path.lstrip('/')}" if path else f"/{PLUGIN_NAME}/webhook"
+        )
+        self._user_path = path if path.startswith("/") else f"/{path}"
         self._token = token
         self._handler: EventHandler | None = None
-        self._runner: web.AppRunner | None = None
-        self._site: web.TCPSite | None = None
         self._started = False
+        self._registered = False
 
     def set_handler(self, handler: EventHandler) -> None:
         """设置事件处理回调函数。"""
         self._handler = handler
 
-    async def _handle_webhook(self, request: web.Request) -> web.Response:
+    async def _handle_webhook(self):
         """处理 BetterGI 的 Webhook POST 请求。"""
         try:
-            logger.debug("[BetterGI-Webhook] 收到请求: method=%s, path=%s", request.method, request.path)
+            logger.debug("[BetterGI-Webhook] 收到 Webhook 请求")
 
             if self._token:
                 auth = request.headers.get("Authorization", "")
@@ -52,16 +54,10 @@ class WebhookServer:
                 query_token = request.query.get("token", "")
                 if token_val != self._token and query_token != self._token:
                     logger.warning("[BetterGI-Webhook] 令牌验证失败")
-                    return web.json_response({"error": "unauthorized"}, status=401)
+                    return error_response("unauthorized", status_code=401)
                 logger.debug("[BetterGI-Webhook] 令牌验证通过")
 
-            body = await request.read()
-            logger.debug("[BetterGI-Webhook] 请求体大小: %d 字节", len(body))
-            if not body:
-                logger.warning("[BetterGI-Webhook] 请求体为空")
-                return web.json_response({"error": "empty body"}, status=400)
-
-            event_data = json.loads(body)
+            event_data = await request.json(default={})
             logger.info("[BetterGI-Webhook] 收到事件: %s", event_data.get("event"))
             logger.debug("[BetterGI-Webhook] 事件字段: %s", list(event_data.keys()))
 
@@ -71,65 +67,61 @@ class WebhookServer:
                 except Exception as e:
                     logger.error("[BetterGI-Webhook] 事件处理失败: %s", e, exc_info=True)
 
-            return web.json_response({"status": "ok"})
+            return json_response({"status": "ok"})
 
-        except json.JSONDecodeError:
-            logger.warning("[BetterGI-Webhook] 请求体不是有效的 JSON: %s", body[:200])
-            return web.json_response({"error": "invalid json"}, status=400)
         except Exception as e:
             logger.error("[BetterGI-Webhook] 处理请求失败: %s", e, exc_info=True)
-            return web.json_response({"error": str(e)}, status=500)
+            return error_response(str(e), status_code=500)
 
-    async def _handle_health(self, request: web.Request) -> web.Response:
+    async def _handle_health(self):
         """健康检查端点。"""
-        return web.json_response({"status": "ok", "service": "bettergi-webhook"})
+        return json_response({"status": "ok", "service": "bettergi-webhook"})
 
-    def _create_app(self) -> web.Application:
-        app = web.Application()
-        app.router.add_post(self._path, self._handle_webhook)
-        app.router.add_get("/health", self._handle_health)
-        return app
-
-    async def start(self) -> bool:
-        """启动 HTTP 服务器。"""
-        if self._started:
-            logger.warning("[BetterGI-Webhook] 服务器已在运行")
+    def register(self, context) -> bool:
+        """通过 AstrBot context 注册 Web API 路由。"""
+        if self._registered:
             return True
 
         try:
-            app = self._create_app()
-            self._runner = web.AppRunner(app)
-            await self._runner.setup()
-            self._site = web.TCPSite(self._runner, self._host, self._port)
-            await self._site.start()
-            self._started = True
-            webhook_url = f"http://<IP>:{self._port}{self._path}"
-            logger.info(
-                f"[BetterGI-Webhook] 服务器已启动，监听 {self._host}:{self._port}"
+            context.register_web_api(
+                self._internal_path,
+                self._handle_webhook,
+                ["POST"],
+                "BetterGI Webhook 接收接口",
             )
-            logger.info(f"[BetterGI-Webhook] Webhook 地址: {webhook_url}")
-            logger.info("[BetterGI-Webhook] 请在 BetterGI 设置中配置此地址")
+            context.register_web_api(
+                self._internal_path + "/health",
+                self._handle_health,
+                ["GET"],
+                "BetterGI Webhook 健康检查",
+            )
+            self._registered = True
+            self._started = True
+            logger.info("[BetterGI-Webhook] 路由已注册到 AstrBot 主端口")
+            logger.info("[BetterGI-Webhook] 注册路径: %s", self._internal_path)
+            logger.info(
+                "[BetterGI-Webhook] 完整地址: http://<AstrBot地址>:<端口>/api/v1/plugins/extensions%s",
+                self._internal_path,
+            )
+            logger.info("[BetterGI-Webhook] 请在 BetterGI 中填写上述完整地址")
             return True
-        except OSError as e:
-            logger.error(f"[BetterGI-Webhook] 端口 {self._port} 被占用或无法绑定: {e}")
-            return False
         except Exception as e:
-            logger.error(f"[BetterGI-Webhook] 启动失败: {e}", exc_info=True)
+            logger.error("[BetterGI-Webhook] 注册路由失败: %s", e, exc_info=True)
             return False
+
+    def unregister(self) -> None:
+        """取消注册（AstrBot 框架会在插件卸载时自动处理，此处标记状态）。"""
+        self._started = False
+        self._registered = False
+        logger.info("[BetterGI-Webhook] 路由已注销")
+
+    async def start(self) -> bool:
+        """兼容旧接口，直接返回 True（路由在 register 时已注册）。"""
+        return self._started
 
     async def stop(self) -> None:
-        """停止 HTTP 服务器。"""
-        if not self._started:
-            return
-
-        if self._site:
-            await self._site.stop()
-            self._site = None
-        if self._runner:
-            await self._runner.cleanup()
-            self._runner = None
-        self._started = False
-        logger.info("[BetterGI-Webhook] 服务器已停止")
+        """停止（兼容旧接口）。"""
+        self.unregister()
 
     @property
     def is_running(self) -> bool:
@@ -137,4 +129,4 @@ class WebhookServer:
 
     @property
     def webhook_url(self) -> str:
-        return f"http://<IP>:{self._port}{self._path}"
+        return f"http://<AstrBot地址>:<端口>/api/v1/plugins/extensions{self._internal_path}"

@@ -2,8 +2,6 @@ import asyncio
 import os
 from typing import Any
 
-import aiohttp
-
 try:
     from astrbot.api import logger
 except ImportError:
@@ -166,16 +164,20 @@ class LocalRunner:
 
 
 class RemoteRunner:
-    """远程模式命令执行器，通过 HTTP API 调用辅助程序。"""
+    """远程模式命令执行器，通过 SSE 连接的辅助程序执行命令。
 
-    def __init__(self, url: str, token: str = "", timeout: int = 30):
-        self._url = url.rstrip("/")
-        self._token = token
-        self._timeout = aiohttp.ClientTimeout(total=timeout)
+    辅助程序主动连接到 AstrBot 主端口的 SSE 端点，
+    插件通过 SSE 下发命令，辅助程序执行后通过 POST /result 上报结果。
+    """
+
+    def __init__(self, manager, timeout: int = 3600):
+        self._manager = manager  # RemoteConnectionManager
+        self._timeout = timeout
         self._current_command: str = ""
 
     @property
     def is_running(self) -> bool:
+        # 简化：有当前命令就认为在运行（实际状态通过 Webhook 事件更新）
         return bool(self._current_command)
 
     @property
@@ -183,136 +185,80 @@ class RemoteRunner:
         return self._current_command
 
     async def run(self, args: list[str]) -> bool:
-        """通过辅助程序 API 启动 BetterGI 命令。"""
+        """通过辅助程序执行 BetterGI 命令。"""
+        if not self._manager.is_connected:
+            logger.error("[BetterGI-Remote] 辅助程序未连接")
+            return False
+
         command_str = " ".join(args)
-        self._current_command = command_str
+        logger.info("[BetterGI-Remote] 下发命令: %s", command_str)
 
-        try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                payload: dict[str, Any] = {"args": args}
-                if self._token:
-                    payload["token"] = self._token
-
-                async with session.post(
-                    f"{self._url}/api/run",
-                    json=payload,
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        logger.info(f"[BetterGI-Remote] 命令已发送: {command_str}")
-                        return data.get("success", False)
-                    else:
-                        text = await resp.text()
-                        logger.error(
-                            f"[BetterGI-Remote] 启动失败 ({resp.status}): {text}"
-                        )
-                        self._current_command = ""
-                        return False
-        except aiohttp.ClientConnectorError:
-            logger.error(f"[BetterGI-Remote] 无法连接辅助程序: {self._url}")
+        success, message = await self._manager.submit_task(args, timeout=self._timeout)
+        if success:
+            self._current_command = command_str
+            logger.info("[BetterGI-Remote] 命令已执行: %s", command_str)
+        else:
             self._current_command = ""
-            return False
-        except asyncio.TimeoutError:
-            logger.error("[BetterGI-Remote] 请求超时")
-            self._current_command = ""
-            return False
-        except Exception as e:
-            logger.error(f"[BetterGI-Remote] 请求失败: {e}", exc_info=True)
-            self._current_command = ""
-            return False
+            logger.error("[BetterGI-Remote] 命令执行失败: %s", message)
+        return success
 
     async def stop(self) -> bool:
-        """通过辅助程序 API 停止当前任务。"""
-        try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                payload: dict[str, Any] = {}
-                if self._token:
-                    payload["token"] = self._token
-
-                async with session.post(
-                    f"{self._url}/api/stop",
-                    json=payload,
-                ) as resp:
-                    success = resp.status == 200
-                    if success:
-                        logger.info("[BetterGI-Remote] 停止命令已发送")
-                    self._current_command = ""
-                    return success
-        except Exception as e:
-            logger.error(f"[BetterGI-Remote] 停止失败: {e}")
-            self._current_command = ""
+        """发送停止指令。"""
+        if not self._manager.is_connected:
             return False
 
-    async def get_status(self) -> dict[str, Any]:
-        """通过辅助程序 API 查询状态。"""
-        try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                params = {}
-                if self._token:
-                    params["token"] = self._token
+        success, message = await self._manager.submit_stop()
+        if success:
+            self._current_command = ""
+            logger.info("[BetterGI-Remote] 已停止: %s", message)
+        else:
+            logger.error("[BetterGI-Remote] 停止失败: %s", message)
+        return success
 
-                async with session.get(
-                    f"{self._url}/api/status",
-                    params=params,
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        self._current_command = data.get("current_command", "")
-                        return {
-                            "is_running": data.get("is_running", False),
-                            "current_command": self._current_command,
-                            "pid": data.get("pid"),
-                            "mode": "remote",
-                        }
-        except Exception:
-            pass
+    async def get_status(self) -> dict[str, Any]:
+        """获取运行状态。"""
         return {
-            "is_running": False,
-            "current_command": "",
+            "is_running": self.is_running,
+            "current_command": self._current_command,
             "pid": None,
             "mode": "remote",
+            "connected": self._manager.is_connected,
         }
 
     async def cleanup(self) -> None:
         pass
 
     async def check_env(self) -> tuple[bool, str]:
-        """检查辅助程序是否可达。"""
-        try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                params = {}
-                if self._token:
-                    params["token"] = self._token
-
-                async with session.get(
-                    f"{self._url}/api/status",
-                    params=params,
-                ) as resp:
-                    if resp.status == 200:
-                        return True, "辅助程序连接正常"
-                    return False, f"辅助程序返回 {resp.status}"
-        except aiohttp.ClientConnectorError:
-            return False, f"无法连接辅助程序: {self._url}"
-        except Exception as e:
-            return False, f"连接异常: {e}"
+        """检查辅助程序是否已连接。"""
+        if self._manager.is_connected:
+            return True, "辅助程序已连接"
+        return False, "辅助程序未连接，请确认辅助程序正在运行且地址配置正确"
 
 
-def create_runner(config: dict) -> LocalRunner | RemoteRunner:
-    """根据配置创建对应的命令执行器。"""
+def create_runner(config: dict, remote_manager=None) -> LocalRunner | RemoteRunner:
+    """根据配置创建对应的命令执行器。
+
+    Args:
+        config: 插件配置
+        remote_manager: 远程连接管理器（远程模式时必须提供）
+    """
     mode = config.get("mode", "local")
     timeout = config.get("command_timeout", 3600)
 
     if mode == "remote":
-        remote_config = config.get("remote", {})
-        logger.debug("[BetterGI-Runner] 创建 RemoteRunner: url=%s", remote_config.get("url", "http://127.0.0.1:9099"))
+        logger.debug("[BetterGI-Runner] 创建 RemoteRunner（SSE模式）")
+        if remote_manager is None:
+            raise ValueError("远程模式需要提供 remote_manager")
         return RemoteRunner(
-            url=remote_config.get("url", "http://127.0.0.1:9099"),
-            token=remote_config.get("token", ""),
-            timeout=30,
+            manager=remote_manager,
+            timeout=timeout,
         )
     else:
         bettergi_dir = config.get("bettergi_dir", "")
-        logger.debug("[BetterGI-Runner] 创建 LocalRunner: bettergi_dir=%s, timeout=%d", bettergi_dir, timeout)
+        logger.debug(
+            "[BetterGI-Runner] 创建 LocalRunner: bettergi_dir=%s, timeout=%d",
+            bettergi_dir, timeout,
+        )
         return LocalRunner(
             bettergi_dir=bettergi_dir,
             timeout=timeout,
