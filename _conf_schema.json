@@ -317,11 +317,17 @@
                 "type": "bool",
                 "default": false
             },
-            "run_time": {
-                "description": "执行时间",
-                "type": "string",
-                "default": "04:00",
-                "hint": "格式 HH:MM，24小时制"
+            "run_hour": {
+                "description": "执行时间 - 小时",
+                "type": "int",
+                "default": 4,
+                "hint": "24小时制，取值范围 0-23"
+            },
+            "run_minute": {
+                "description": "执行时间 - 分钟",
+                "type": "int",
+                "default": 0,
+                "hint": "取值范围 0-59"
             },
             "command_index": {
                 "description": "执行的命令序号",

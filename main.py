@@ -17,7 +17,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.0.9")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.1.0")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -165,7 +165,11 @@ class BetterGIPlugin(Star):
 
         scheduled = self.config.get("scheduled_task", {})
         if scheduled.get("enable", False):
-            self._scheduler.start(self._run_scheduled_task)
+            self._scheduler.start(
+                self._run_scheduled_task,
+                scheduled.get("run_hour", 4),
+                scheduled.get("run_minute", 0),
+            )
 
         logger.info("[BetterGI] 插件已加载")
 

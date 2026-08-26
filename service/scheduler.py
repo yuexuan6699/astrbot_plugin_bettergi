@@ -17,12 +17,16 @@ class Scheduler:
     - 插件在计划时间后启动时会立即执行任务
     - 时间计算不精确，轮询间隔过大
     - 异常处理不完善，定时器可能中断
+    - 配置时间未传入调度器，永远使用 04:00
+    - 字符串时间解析可能出现非数字错误
     """
 
     def __init__(self):
         self._task: asyncio.Task | None = None
         self._running = False
         self._last_run_date: str | None = None
+        self._run_hour: int = 4
+        self._run_minute: int = 0
 
     @property
     def is_running(self) -> bool:
@@ -32,22 +36,30 @@ class Scheduler:
     def last_run_date(self) -> str | None:
         return self._last_run_date
 
-    def start(self, run_func) -> bool:
+    def start(self, run_func, run_hour: int = 4, run_minute: int = 0) -> bool:
         """启动定时任务。
 
         Args:
             run_func: 异步函数，无参数，执行定时任务逻辑
+            run_hour: 执行小时（0-23），超出范围会被自动夹紧
+            run_minute: 执行分钟（0-59），超出范围会被自动夹紧
         """
         if self._running:
             logger.warning("[BetterGI-Scheduler] 定时任务已在运行")
             return False
+
+        self._run_hour = max(0, min(23, run_hour))
+        self._run_minute = max(0, min(59, run_minute))
 
         today = datetime.now().strftime("%Y-%m-%d")
         self._last_run_date = today
 
         self._running = True
         self._task = asyncio.create_task(self._loop(run_func))
-        logger.info("[BetterGI-Scheduler] 定时任务已启动")
+        logger.info(
+            "[BetterGI-Scheduler] 定时任务已启动，每天 %02d:%02d 执行",
+            self._run_hour, self._run_minute,
+        )
         return True
 
     async def stop(self) -> None:
@@ -74,7 +86,7 @@ class Scheduler:
 
         while self._running:
             try:
-                wait_seconds = self._calc_wait_seconds()
+                wait_seconds = self._calc_wait_seconds(self._run_hour, self._run_minute)
                 if wait_seconds > 0:
                     logger.info(
                         f"[BetterGI-Scheduler] 下次执行需等待 {wait_seconds:.0f} 秒"
@@ -117,19 +129,17 @@ class Scheduler:
         self._running = False
         logger.info("[BetterGI-Scheduler] 定时任务循环已退出")
 
-    def _calc_wait_seconds(self, run_time: str = "") -> float:
+    def _calc_wait_seconds(self, hour: int, minute: int) -> float:
         """计算到下一次执行时间的等待秒数。
 
         如果今天的执行时间还没到，等到今天的时间点。
         如果今天的执行时间已过，等到明天的同一时间。
+
+        Args:
+            hour: 执行小时（已在 start 中校验为 0-23）
+            minute: 执行分钟（已在 start 中校验为 0-59）
         """
         now = datetime.now()
-
-        try:
-            hour, minute = map(int, run_time.split(":"))
-        except (ValueError, AttributeError):
-            hour, minute = 4, 0
-
         today_target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
         if now < today_target:
