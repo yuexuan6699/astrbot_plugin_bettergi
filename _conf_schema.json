@@ -101,7 +101,7 @@
     "webhook": {
         "description": "Webhook 配置",
         "type": "object",
-        "hint": "接收 BetterGI 事件通知，用于任务完成检测和日志转发",
+        "hint": "接收 BetterGI 事件通知，用于任务完成检测和日志转发。请求需携带 AstrBot API 密钥",
         "items": {
             "enable": {
                 "description": "启用 Webhook 接收",
@@ -113,13 +113,7 @@
                 "description": "Webhook 路径后缀",
                 "type": "string",
                 "default": "/webhook",
-                "hint": "完整地址为 http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi<路径>"
-            },
-            "token": {
-                "description": "验证令牌",
-                "type": "string",
-                "default": "",
-                "hint": "可选的验证令牌，BetterGI 和插件需填写一致的值"
+                "hint": "完整地址: http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi<路径>?key=API密钥。密钥在 AstrBot 设置→OpenAPI 创建：只勾选 plugin 权限，其他取消，有效期选永久，名称随意填"
             }
         }
     },
@@ -273,19 +267,6 @@
                         "hint": "JavaScript 脚本运行出错时转发，含错误信息"
                     }
                 }
-            }
-        }
-    },
-    "remote": {
-        "description": "远程模式配置",
-        "type": "object",
-        "hint": "辅助程序主动连接 AstrBot，无需开放端口，只需在辅助程序配置 AstrBot 地址",
-        "items": {
-            "token": {
-                "description": "认证令牌",
-                "type": "string",
-                "default": "",
-                "hint": "需与辅助程序 config.yaml 中配置的 token 保持一致"
             }
         }
     },

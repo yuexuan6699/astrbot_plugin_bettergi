@@ -2,7 +2,7 @@
 # BetterGI 远程辅助程序配置（客户端模式）
 # ============================================================
 # 辅助程序主动连接到 AstrBot，无需开放任何端口。
-# 只需填写 AstrBot 的访问地址即可。
+# 需填写 AstrBot 的访问地址和 API 密钥。
 
 # AstrBot 的访问地址（必填）
 # 辅助程序会连接到这个地址的 SSE 端点等待指令
@@ -12,8 +12,13 @@ astrbot_url: "http://127.0.0.1:6185"
 # BetterGI 安装目录（必填）
 bettergi_dir: "D:\\BetterGI"
 
-# 认证令牌（可选，与插件配置保持一致）
-token: "your-secret-token"
+# AstrBot API 密钥（必填）
+# 在 AstrBot 管理面板 设置→OpenAPI 中创建：
+#   - 名称随便填
+#   - 权限只勾选 plugin，其他取消勾选
+#   - 有效期选择永久
+# 创建后复制 abk_ 开头的密钥填到这里
+api_key: "abk_xxxxxxxxxxxxxxxx"
 
 # 日志级别: DEBUG, INFO, WARNING, ERROR
 log_level: "INFO"

@@ -18,7 +18,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.1.2")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.1.3")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -36,14 +36,11 @@ class BetterGIPlugin(Star):
         self._event_store = EventStore(self._get_data_dir())
         self._scheduler = Scheduler()
 
-        # 远程模式连接管理器
+        # 远程模式连接管理器（认证由 AstrBot API 密钥统一处理）
         mode = config.get("mode", "local")
         self._remote_manager: RemoteConnectionManager | None = None
         if mode == "remote":
-            remote_cfg = config.get("remote", {})
-            self._remote_manager = RemoteConnectionManager(
-                token=remote_cfg.get("token", ""),
-            )
+            self._remote_manager = RemoteConnectionManager()
             logger.debug("[BetterGI-Init] 已创建 RemoteConnectionManager")
 
         self._runner = create_runner(config, remote_manager=self._remote_manager)
@@ -57,7 +54,6 @@ class BetterGIPlugin(Star):
 
         self._webhook_server = WebhookServer(
             path=webhook_cfg.get("path", "/webhook"),
-            token=webhook_cfg.get("token", ""),
         )
         self._webhook_server.set_handler(self._on_webhook_event)
 
@@ -186,24 +182,12 @@ class BetterGIPlugin(Star):
         logger.info("[BetterGI] 插件已加载")
 
     def _register_remote_routes(self) -> None:
-        """注册远程模式的 Web API 路由。"""
+        """注册远程模式的 Web API 路由（认证由 AstrBot API 密钥统一处理）。"""
         try:
-            from astrbot.api.web import error_response, json_response, request, stream_response
+            from astrbot.api.web import json_response, request, stream_response
 
             # SSE 连接端点：辅助程序连接上来等待指令
             async def sse_handler():
-                token = self._remote_manager.token
-                if token:
-                    query_token = request.query.get("token", "")
-                    auth = request.headers.get("Authorization", "")
-                    header_token = ""
-                    if auth.startswith("Bearer "):
-                        header_token = auth[7:]
-                    elif auth:
-                        header_token = auth
-                    if query_token != token and header_token != token:
-                        return error_response("unauthorized", status_code=401)
-
                 return stream_response(
                     self._remote_manager.sse_stream(),
                     content_type="text/event-stream",
@@ -219,18 +203,6 @@ class BetterGIPlugin(Star):
 
             # 结果上报端点：辅助程序执行完后上报结果
             async def result_handler():
-                token = self._remote_manager.token
-                if token:
-                    query_token = request.query.get("token", "")
-                    auth = request.headers.get("Authorization", "")
-                    header_token = ""
-                    if auth.startswith("Bearer "):
-                        header_token = auth[7:]
-                    elif auth:
-                        header_token = auth
-                    if query_token != token and header_token != token:
-                        return error_response("unauthorized", status_code=401)
-
                 data = await request.json(default={})
                 ok = await self._remote_manager.handle_result(data)
                 return json_response({"status": "ok" if ok else "not_found"})
@@ -259,6 +231,9 @@ class BetterGIPlugin(Star):
             logger.info("[BetterGI] 远程模式路由已注册")
             logger.info(
                 "[BetterGI] SSE地址: http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi/remote/connect"
+            )
+            logger.info(
+                "[BetterGI] 辅助程序需在 config.yaml 中配置 api_key（AstrBot 设置→OpenAPI 创建，只勾选 plugin 权限）"
             )
         except Exception as e:
             logger.error("[BetterGI] 注册远程模式路由失败: %s", e, exc_info=True)
@@ -645,7 +620,8 @@ class BetterGIPlugin(Star):
             f"  {p}{help_cmd}        - 显示此帮助\n\n"
             f"📌 Webhook 配置：\n"
             f"  在 BetterGI 设置中配置 Webhook 地址为：\n"
-            f"  {self._webhook_server.webhook_url}\n\n"
+            f"  {self._webhook_server.webhook_url}\n"
+            f"  API 密钥在 AstrBot 设置→OpenAPI 创建（只勾选 plugin 权限，有效期选永久）\n\n"
             f"📌 事件类型参考：\n"
             f"  dragon.start/end - 一条龙启动/结束\n"
             f"  group.start/end  - 配置组启动/结束\n"

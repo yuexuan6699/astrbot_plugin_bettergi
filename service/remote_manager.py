@@ -27,16 +27,11 @@ class RemoteConnectionManager:
     辅助程序执行后通过 POST /result 上报结果。
     """
 
-    def __init__(self, token: str = ""):
-        self._token = token
+    def __init__(self):
         self._connected = False
         self._pending_tasks: dict[str, PendingTask] = {}
         self._connect_event = asyncio.Event()
         self._command_queue: asyncio.Queue[dict] = asyncio.Queue()
-
-    @property
-    def token(self) -> str:
-        return self._token
 
     @property
     def is_connected(self) -> bool:

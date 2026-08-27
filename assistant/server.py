@@ -130,7 +130,7 @@ def stop_bettergi(bettergi_dir: str) -> tuple[bool, str]:
 
 
 def report_result(
-    astrbot_url: str, token: str, task_id: str, success: bool, message: str
+    astrbot_url: str, api_key: str, task_id: str, success: bool, message: str
 ) -> bool:
     """上报执行结果到 AstrBot。"""
     url = f"{astrbot_url.rstrip('/')}/api/v1/plugins/extensions/bettergi/remote/result"
@@ -140,9 +140,9 @@ def report_result(
         "message": message,
     }
     headers = {}
-    if token:
-        # 只走 Authorization 头，避免 token 出现在 URL 中被访问日志记录
-        headers["Authorization"] = f"Bearer {token}"
+    if api_key:
+        # 只走 Authorization 头，避免密钥出现在 URL 中被访问日志记录
+        headers["Authorization"] = f"ApiKey {api_key}"
 
     try:
         with httpx.Client(timeout=10) as client:
@@ -157,11 +157,13 @@ def report_result(
         return False
 
 
-def sse_connect(astrbot_url: str, token: str, bettergi_dir: str) -> None:
+def sse_connect(astrbot_url: str, api_key: str, bettergi_dir: str) -> None:
     """连接 SSE 端点并处理指令。"""
     url = f"{astrbot_url.rstrip('/')}/api/v1/plugins/extensions/bettergi/remote/connect"
-    if token:
-        url += f"?token={token}"
+    headers = {}
+    if api_key:
+        # 只走 Authorization 头，避免密钥出现在 URL 中被访问日志记录
+        headers["Authorization"] = f"ApiKey {api_key}"
 
     logging.info("连接 SSE 端点: %s", url)
 
@@ -170,9 +172,14 @@ def sse_connect(astrbot_url: str, token: str, bettergi_dir: str) -> None:
 
     while True:
         try:
-            with httpx.stream("GET", url, timeout=timeout) as resp:
+            with httpx.stream("GET", url, headers=headers, timeout=timeout) as resp:
                 if resp.status_code != 200:
                     logging.error("连接失败: HTTP %d", resp.status_code)
+                    if resp.status_code == 401:
+                        logging.error(
+                            "认证失败，请检查 config.yaml 中的 api_key"
+                            "（在 AstrBot 设置→OpenAPI 创建，只勾选 plugin 权限）"
+                        )
                 else:
                     logging.info("已连接到 AstrBot，等待指令...")
 
@@ -185,7 +192,7 @@ def sse_connect(astrbot_url: str, token: str, bettergi_dir: str) -> None:
                             if event_type and data_buffer:
                                 _handle_event(
                                     event_type, data_buffer, bettergi_dir,
-                                    astrbot_url, token,
+                                    astrbot_url, api_key,
                                 )
                             event_type = ""
                             data_buffer = ""
@@ -211,7 +218,7 @@ def _handle_event(
     data: str,
     bettergi_dir: str,
     astrbot_url: str,
-    token: str,
+    api_key: str,
 ) -> None:
     """处理 SSE 事件。"""
     if event_type == "connected":
@@ -240,15 +247,15 @@ def _handle_event(
     if cmd_type == "run":
         args = cmd_data.get("args", [])
         success, message = run_bettergi(bettergi_dir, args)
-        report_result(astrbot_url, token, task_id, success, message)
+        report_result(astrbot_url, api_key, task_id, success, message)
 
     elif cmd_type == "stop":
         success, message = stop_bettergi(bettergi_dir)
-        report_result(astrbot_url, token, task_id, success, message)
+        report_result(astrbot_url, api_key, task_id, success, message)
 
     else:
         logging.warning("未知命令类型: %s", cmd_type)
-        report_result(astrbot_url, token, task_id, False, f"未知命令: {cmd_type}")
+        report_result(astrbot_url, api_key, task_id, False, f"未知命令: {cmd_type}")
 
 
 def main() -> None:
@@ -265,7 +272,7 @@ def main() -> None:
 
     astrbot_url = config.get("astrbot_url", "")
     bettergi_dir = config.get("bettergi_dir", "")
-    token = config.get("token", "")
+    api_key = config.get("api_key", "")
 
     if not astrbot_url:
         logging.error("配置错误: astrbot_url 不能为空")
@@ -274,6 +281,14 @@ def main() -> None:
     if not bettergi_dir:
         logging.error("配置错误: bettergi_dir 不能为空")
         sys.exit(1)
+
+    if config.get("token", ""):
+        logging.warning("检测到旧版 token 配置已废弃，请改用 api_key")
+    if not api_key:
+        logging.warning(
+            "api_key 未配置，新版 AstrBot 会拒绝连接（401）。"
+            "请在 AstrBot 设置→OpenAPI 创建密钥（只勾选 plugin 权限，有效期选永久）"
+        )
 
     if not os.path.exists(bettergi_dir):
         logging.error("BetterGI 目录不存在: %s", bettergi_dir)
@@ -290,11 +305,11 @@ def main() -> None:
     logging.info("AstrBot 地址: %s", astrbot_url)
     logging.info("BetterGI 目录: %s", bettergi_dir)
     logging.info("可执行文件: %s", exe)
-    logging.info("令牌: %s", "已设置" if token else "未设置")
+    logging.info("API 密钥: %s", "已设置" if api_key else "未设置")
     logging.info("=" * 50)
 
     try:
-        sse_connect(astrbot_url, token, bettergi_dir)
+        sse_connect(astrbot_url, api_key, bettergi_dir)
     except KeyboardInterrupt:
         logging.info("用户中断，正在退出...")
 

@@ -87,15 +87,14 @@ AstrBot 和 BetterGI 在不同设备。辅助程序运行在 BetterGI 所在电�
 
 ### Webhook 配置
 
-Webhook 复用 AstrBot 主端口，无需额外开端口。
+Webhook 复用 AstrBot 主端口，无需额外开端口。请求需携带 AstrBot API 密钥（创建方法见「使用方法 → Webhook 配置」）。
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | `webhook.enable` | 启用 Webhook 接收 | `true` |
 | `webhook.path` | Webhook 路径后缀 | `/webhook` |
-| `webhook.token` | 验证令牌（可选） | `""` |
 
-完整地址格式：`http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi/webhook`
+完整地址格式：`http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi/webhook?key=API密钥`
 
 ### 定时任务
 
@@ -108,12 +107,12 @@ Webhook 复用 AstrBot 主端口，无需额外开端口。
 
 ### 远程模式配置
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `remote.token` | 认证令牌 | `""` |
+远程模式无需在插件中额外配置，认证统一使用 AstrBot API 密钥：
 
-辅助程序主动连接 AstrBot，无需在插件配置辅助程序地址。
-只需在辅助程序的 `config.yaml` 中填写 AstrBot 地址和相同的 token。
+- **插件端** - 无需配置，路由注册后由 AstrBot 统一认证
+- **辅助程序** - 在 `assistant/config.yaml` 中填写 `api_key`
+
+API 密钥创建方法见「使用方法 → Webhook 配置」，同一个密钥可同时用于 Webhook 和远程模式。
 
 ### 权限配置
 
@@ -144,13 +143,29 @@ AstrBot 全局管理员（`admins_id`）自动拥有权限，无需在此列表�
 
 ### Webhook 配置
 
-1. 在插件配置中设置 Webhook 路径（默认 `/webhook` 即可）
-2. 启动插件后，查看日志获取完整 Webhook 地址
-3. 在 BetterGI 设置 → 通知渠道 → Webhook 中填入地址
+BetterGI 推送事件到 AstrBot 需通过接口认证，需先创建 API 密钥，再把带密钥的地址填入 BetterGI。
 
-完整地址格式：`http://<AstrBot所在IP>:<端口>/api/v1/plugins/extensions/bettergi/webhook`
+**1. 创建 API 密钥**
 
-例如：`http://192.168.1.100:6185/api/v1/plugins/extensions/bettergi/webhook`
+- 进入 AstrBot 管理面板 **设置 → OpenAPI**
+- 新建密钥：**名称随便填**，权限**只勾选 `plugin`**（其他取消勾选），有效期选择**永久**
+- 创建后复制生成的密钥（`abk_` 开头）
+
+**2. 在 BetterGI 中填入 Webhook 地址**
+
+进入 BetterGI 设置 → 通知渠道 → Webhook，填入：
+
+```
+http://<AstrBot所在IP>:<端口>/api/v1/plugins/extensions/bettergi/webhook?key=你的API密钥
+```
+
+例如：`http://192.168.1.100:6185/api/v1/plugins/extensions/bettergi/webhook?key=abk_xxxxxxxx`
+
+**3. 验证**
+
+在 BetterGI 通知渠道中点击测试，AstrBot 日志出现 `notify.test` 事件即配置成功（转发到聊天会话需在插件配置中勾选「测试通知」事件）。
+
+> 密钥仅用于通过 AstrBot 接口认证，泄露后可在 OpenAPI 页面删除重建。远程模式的辅助程序也使用同一个密钥。
 
 ### 事件类型
 
@@ -177,9 +192,13 @@ BetterGI 支持的 Webhook 事件类型（可在配置中勾选需要通知的�
 
 - **零端口** - BetterGI 所在电脑无需开放任何端口
 - **主动连接** - 辅助程序主动连接到 AstrBot，断线自动重连
-- **安全** - 支持令牌验证，只允许执行指定命令
+- **安全** - 通过 AstrBot API 密钥认证，只允许执行指定命令
 
-### 1. 安装辅助程序依赖
+### 1. 创建 API 密钥
+
+远程模式与 Webhook 共用同一个 API 密钥，创建方法见「使用方法 → Webhook 配置」第 1 步。
+
+### 2. 安装辅助程序依赖
 
 在 BetterGI 所在电脑上：
 
@@ -188,7 +207,7 @@ cd assistant
 pip install -r requirements.txt
 ```
 
-### 2. 配置 config.yaml
+### 3. 配置 config.yaml
 
 编辑 `assistant/config.yaml`：
 
@@ -200,14 +219,15 @@ astrbot_url: "http://192.168.1.100:6185"
 # BetterGI 安装目录（必填）
 bettergi_dir: "D:\\BetterGI"
 
-# 认证令牌（与插件配置保持一致）
-token: "your-secret-token"
+# AstrBot API 密钥（必填）
+# 在 AstrBot 设置→OpenAPI 创建：名称随便填，只勾选 plugin 权限，有效期选永久
+api_key: "abk_xxxxxxxxxxxxxxxx"
 
 # 日志级别
 log_level: "INFO"
 ```
 
-### 3. 使用 运行功能.bat
+### 4. 使用 运行功能.bat
 
 双击 `运行功能.bat`，通过交互式菜单操作：
 
@@ -220,15 +240,13 @@ log_level: "INFO"
 | 5. 测试连接 AstrBot | 检查是否能连接到 AstrBot |
 | 6. 退出 | 退出菜单 |
 
-### 4. 配置插件
+### 5. 配置插件
 
-在 AstrBot 插件配置中：
-- `mode` 设为 `remote`
-- `remote.token` 填入与 config.yaml 中一致的令牌
+在 AstrBot 插件配置中，将 `mode` 设为 `remote` 即可。认证由 AstrBot API 密钥统一处理，无需在插件中配置密钥。
 
-### 5. Webhook 配置
+### 6. Webhook 配置
 
-远程模式下 Webhook 仍然由 AstrBot 插件接收，BetterGI 直接推送到 AstrBot 地址。
+远程模式下 Webhook 仍然由 AstrBot 插件接收，BetterGI 直接推送到 AstrBot 地址（同样需带 `?key=API密钥`，见「使用方法 → Webhook 配置」）。
 
 ### 日志
 

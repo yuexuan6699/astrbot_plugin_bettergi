@@ -1,4 +1,14 @@
 
+2.1.3: 认证统一为 AstrBot API 密钥 26.08.27
+
+- 删除 webhook.token 和 remote.token 配置项，认证统一由 AstrBot 接口层处理
+- Webhook 地址需携带 API 密钥：http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi/webhook?key=API密钥
+- API 密钥在 AstrBot 设置→OpenAPI 创建：名称随便填，只勾选 plugin 权限，有效期选永久
+- 修复远程模式在新版 AstrBot 下因接口强制认证导致的 401（原 Bearer 头和 ?token= 参数均不被接口层接受）
+- 辅助程序配置 token 改为 api_key，SSE 连接和结果上报通过 Authorization: ApiKey 头携带密钥
+- 辅助程序对旧版 token 配置和无密钥情况给出明确警告
+- bat 脚本连接测试自动携带 API 密钥，补充密钥相关错误提示
+
 2.1.2: 综合检查修复 26.08.27
 
 - 修复权限逻辑与配置说明不一致：better_master 为空时改为仅管理员可用

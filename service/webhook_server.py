@@ -18,18 +18,17 @@ class WebhookServer:
     """接收 BetterGI Webhook 事件通知（复用 AstrBot 主端口）。
 
     通过 context.register_web_api() 注册路由，不再单独开端口。
+    认证由 AstrBot 统一处理，请求需携带 API 密钥（地址后加 ?key=密钥）。
     """
 
     def __init__(
         self,
         path: str = "/webhook",
-        token: str = "",
     ):
         # 内部注册路径加上插件名前缀，如 /bettergi/webhook
         self._internal_path = (
             f"/{PLUGIN_NAME}/{path.lstrip('/')}" if path else f"/{PLUGIN_NAME}/webhook"
         )
-        self._token = token
         self._handler: EventHandler | None = None
         self._started = False
         self._registered = False
@@ -42,19 +41,6 @@ class WebhookServer:
         """处理 BetterGI 的 Webhook POST 请求。"""
         try:
             logger.debug("[BetterGI-Webhook] 收到 Webhook 请求")
-
-            if self._token:
-                auth = request.headers.get("Authorization", "")
-                token_val = ""
-                if auth.startswith("Bearer "):
-                    token_val = auth[7:]
-                elif auth:
-                    token_val = auth
-                query_token = request.query.get("token", "")
-                if token_val != self._token and query_token != self._token:
-                    logger.warning("[BetterGI-Webhook] 令牌验证失败")
-                    return error_response("unauthorized", status_code=401)
-                logger.debug("[BetterGI-Webhook] 令牌验证通过")
 
             event_data = await request.json(default={})
             logger.info("[BetterGI-Webhook] 收到事件: %s", event_data.get("event"))
@@ -99,10 +85,12 @@ class WebhookServer:
             logger.info("[BetterGI-Webhook] 路由已注册到 AstrBot 主端口")
             logger.info("[BetterGI-Webhook] 注册路径: %s", self._internal_path)
             logger.info(
-                "[BetterGI-Webhook] 完整地址: http://<AstrBot地址>:<端口>/api/v1/plugins/extensions%s",
+                "[BetterGI-Webhook] 完整地址: http://<AstrBot地址>:<端口>/api/v1/plugins/extensions%s?key=API密钥",
                 self._internal_path,
             )
-            logger.info("[BetterGI-Webhook] 请在 BetterGI 中填写上述完整地址")
+            logger.info(
+                "[BetterGI-Webhook] API 密钥在 AstrBot 设置→OpenAPI 创建（只勾选 plugin 权限，有效期选永久）"
+            )
             return True
         except Exception as e:
             logger.error("[BetterGI-Webhook] 注册路由失败: %s", e, exc_info=True)
@@ -124,4 +112,7 @@ class WebhookServer:
 
     @property
     def webhook_url(self) -> str:
-        return f"http://<AstrBot地址>:<端口>/api/v1/plugins/extensions{self._internal_path}"
+        return (
+            f"http://<AstrBot地址>:<端口>/api/v1/plugins/extensions"
+            f"{self._internal_path}?key=API密钥"
+        )

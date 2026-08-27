@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 :: BetterGI 远程辅助程序启动脚本（客户端模式）
 :: ============================================================
 :: 辅助程序主动连接 AstrBot，无需开放端口
-:: 只需配置 AstrBot 地址即可
+:: 需在 config.yaml 配置 AstrBot 地址和 API 密钥
 
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
@@ -32,7 +32,7 @@ for /f "delims=" %%i in ('where pythonw 2^>nul') do (
 :found_pythonw
 
 :: ============================================================
-:: 从 config.yaml 读取 astrbot_url 用于连接测试
+:: 从 config.yaml 读取 astrbot_url 和 api_key 用于连接测试
 :: 注意：URL 含冒号，必须用 tokens=1,* 取冒号后的完整内容
 :: ============================================================
 set "ASTRBOT_URL=http://127.0.0.1:6185"
@@ -42,6 +42,12 @@ for /f "tokens=1,* delims=: " %%a in ('findstr /i "^astrbot_url:" "%SCRIPT_DIR%c
 :: 去除引号和空格
 set "ASTRBOT_URL=%ASTRBOT_URL:"=%"
 set "ASTRBOT_URL=%ASTRBOT_URL: =%"
+
+set "API_KEY="
+for /f "tokens=1,* delims=: " %%a in ('findstr /i "^api_key:" "%SCRIPT_DIR%config.yaml" 2^>nul') do (
+    set "API_KEY=%%b"
+)
+set "API_KEY=%API_KEY:"=%"
 
 :menu
 cls
@@ -159,10 +165,17 @@ if "%ASTRBOT_URL%"=="" (
     goto menu
 )
 
-:: 调用健康检查接口
-set "HEALTH_URL=%ASTRBOT_URL%/api/v1/plugins/extensions/bettergi/remote/health"
+if "%API_KEY%"=="" (
+    echo [错误] 配置文件中 api_key 为空
+    echo   请在 AstrBot 设置→OpenAPI 创建密钥后填入 config.yaml
+    pause
+    goto menu
+)
 
-powershell -Command "try { $r = Invoke-WebRequest -Uri '%HEALTH_URL%' -TimeoutSec 5 -UseBasicParsing; Write-Host '  连接成功'; Write-Host '  响应:' $r.Content } catch { Write-Host '  连接失败'; Write-Host '  可能原因:'; Write-Host '    1. AstrBot 未启动'; Write-Host '    2. astrbot_url 配置错误'; Write-Host '    3. 网络不通'; Write-Host '    4. 插件未加载' }"
+:: 调用健康检查接口（带上 API 密钥）
+set "HEALTH_URL=%ASTRBOT_URL%/api/v1/plugins/extensions/bettergi/remote/health?key=%API_KEY%"
+
+powershell -Command "try { $r = Invoke-WebRequest -Uri '%HEALTH_URL%' -TimeoutSec 5 -UseBasicParsing; Write-Host '  连接成功'; Write-Host '  响应:' $r.Content } catch { Write-Host '  连接失败'; Write-Host '  可能原因:'; Write-Host '    1. AstrBot 未启动'; Write-Host '    2. astrbot_url 配置错误'; Write-Host '    3. api_key 配置错误或未勾选 plugin 权限'; Write-Host '    4. 网络不通'; Write-Host '    5. 插件未加载' }"
 
 echo.
 pause
