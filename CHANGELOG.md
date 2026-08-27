@@ -1,4 +1,27 @@
 
+2.1.2: 综合检查修复 26.08.27
+
+- 修复权限逻辑与配置说明不一致：better_master 为空时改为仅管理员可用
+- stop_event 仅在匹配到命令时触发，不再拦截 better 开头的普通消息
+- 权限检查移到前缀匹配之后，避免每条消息都查询管理员配置
+- 修复子进程管道无人读取可能导致的卡死（本地与辅助程序均改 DEVNULL）
+- 修复 bat 脚本读取 astrbot_url 时被 URL 冒号截断的问题
+- SSE 连接增加 30 秒心跳，断开时清空待执行队列，防止重连后执行过期命令
+- 辅助程序断线统一 5 秒后重连，连接阶段增加 10 秒超时
+- 修复定时任务启动即显示"上次执行"为当天的问题
+- 运行/停止失败时向用户返回具体原因（辅助程序未连接、已有任务运行等）
+- 结果上报仅通过 Authorization 头携带 token，不再暴露于 URL
+- 删除无效配置 command_timeout、debug_log 及死代码
+
+2.1.1: 复用 AstrBot 主端口 26.08.27
+
+- Webhook 接收从独立 aiohttp 服务器（默认 8088 端口）改为 register_web_api 注册路由，复用 AstrBot 主端口，不再单独占用端口
+- Webhook 地址变更为 http://<AstrBot地址>:<端口>/api/v1/plugins/extensions/bettergi/webhook
+- 远程模式重构：辅助程序从监听端口的 HTTP 服务器改为主动连接 AstrBot 的 SSE 客户端，BetterGI 所在电脑无需开放任何端口
+- 插件通过 SSE 下发指令，辅助程序执行后 POST 回传结果
+- 辅助程序配置从 host/port 改为 astrbot_url，依赖从 fastapi/uvicorn 精简为 httpx
+- 插件移除 aiohttp 依赖
+
 2.1.0: 修复定时任务时间无效 26.08.27
 
 - 修复调度器未读取配置时间、始终按默认 04:00 执行的问题
