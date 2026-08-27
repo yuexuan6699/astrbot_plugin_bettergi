@@ -51,9 +51,6 @@ class Scheduler:
         self._run_hour = max(0, min(23, run_hour))
         self._run_minute = max(0, min(59, run_minute))
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        self._last_run_date = today
-
         self._running = True
         self._task = asyncio.create_task(self._loop(run_func))
         logger.info(

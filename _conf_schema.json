@@ -319,18 +319,6 @@
             }
         }
     },
-    "command_timeout": {
-        "description": "命令执行超时时间（秒）",
-        "type": "int",
-        "default": 1800,
-        "hint": "单个命令的最大执行时间，默认30分钟"
-    },
-    "debug_log": {
-        "description": "调试日志",
-        "type": "bool",
-        "default": false,
-        "hint": "启用后输出详细的调试信息"
-    },
     "better_master": {
         "description": "额外授权用户ID列表",
         "type": "list",

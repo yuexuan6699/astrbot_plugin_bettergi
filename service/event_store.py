@@ -74,12 +74,6 @@ class EventStore:
         async with self._lock:
             return list(self._events)[-count:]
 
-    async def get_by_event_type(self, event_type: str, count: int = 10) -> list[dict]:
-        """按事件类型过滤获取事件。"""
-        async with self._lock:
-            filtered = [e for e in self._events if e.get("event") == event_type]
-            return filtered[-count:]
-
     async def clear(self) -> int:
         """清空所有事件，返回被清除的数量。"""
         async with self._lock:
@@ -87,14 +81,6 @@ class EventStore:
             self._events.clear()
             self._save_to_file()
             return count
-
-    async def get_last_completion(self) -> dict[str, Any] | None:
-        """获取最近一条任务完成事件（dragon.end 或 group.end）。"""
-        async with self._lock:
-            for event in reversed(self._events):
-                if event.get("event") in ("dragon.end", "group.end"):
-                    return event
-            return None
 
     @staticmethod
     def format_event(event: dict) -> str:

@@ -37,11 +37,11 @@ def build_command(template_key: str, config_name: str) -> list[str]:
 class LocalRunner:
     """本地模式命令执行器，直接通过子进程执行 BetterGI.exe。"""
 
-    def __init__(self, bettergi_dir: str, timeout: int = 3600):
+    def __init__(self, bettergi_dir: str):
         self._bettergi_dir = bettergi_dir
-        self._timeout = timeout
         self._process: asyncio.subprocess.Process | None = None
         self._current_command: str = ""
+        self.last_error: str = ""
         self._lock = asyncio.Lock()
 
     @property
@@ -59,11 +59,13 @@ class LocalRunner:
         """
         async with self._lock:
             if self.is_running:
+                self.last_error = "已有任务正在运行，请先停止"
                 logger.warning("[BetterGI-Runner] 已有任务正在运行，请先停止")
                 return False
 
             exe_path = self._find_executable()
             if not exe_path:
+                self.last_error = f"未找到 BetterGI.exe: {self._bettergi_dir}"
                 logger.error(
                     f"[BetterGI-Runner] 未找到 BetterGI.exe: {self._bettergi_dir}"
                 )
@@ -78,22 +80,27 @@ class LocalRunner:
                 env.pop("PYTHONPATH", None)
                 env.pop("PYTHONHOME", None)
 
+                # DEVNULL 而非 PIPE：无人读取管道，PIPE 会因缓冲区填满卡死子进程
                 self._process = await asyncio.create_subprocess_exec(
                     *cmd,
                     cwd=self._bettergi_dir,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
                     env=env,
                 )
+                self.last_error = ""
                 logger.info(f"[BetterGI-Runner] 进程已启动 (PID: {self._process.pid})")
                 return True
             except FileNotFoundError:
+                self.last_error = f"可执行文件不存在: {exe_path}"
                 logger.error(f"[BetterGI-Runner] 可执行文件不存在: {exe_path}")
                 return False
             except PermissionError:
+                self.last_error = "权限不足，可能需要管理员权限"
                 logger.error("[BetterGI-Runner] 权限不足，可能需要管理员权限")
                 return False
             except Exception as e:
+                self.last_error = f"启动进程失败: {e}"
                 logger.error(f"[BetterGI-Runner] 启动进程失败: {e}", exc_info=True)
                 return False
 
@@ -249,7 +256,6 @@ def create_runner(config: dict, remote_manager=None) -> LocalRunner | RemoteRunn
         remote_manager: 远程连接管理器（远程模式时必须提供）
     """
     mode = config.get("mode", "local")
-    timeout = config.get("command_timeout", 3600)
 
     if mode == "remote":
         logger.debug("[BetterGI-Runner] 创建 RemoteRunner（SSE模式）")
@@ -259,10 +265,7 @@ def create_runner(config: dict, remote_manager=None) -> LocalRunner | RemoteRunn
     else:
         bettergi_dir = config.get("bettergi_dir", "")
         logger.debug(
-            "[BetterGI-Runner] 创建 LocalRunner: bettergi_dir=%s, timeout=%d",
-            bettergi_dir, timeout,
+            "[BetterGI-Runner] 创建 LocalRunner: bettergi_dir=%s",
+            bettergi_dir,
         )
-        return LocalRunner(
-            bettergi_dir=bettergi_dir,
-            timeout=timeout,
-        )
+        return LocalRunner(bettergi_dir=bettergi_dir)

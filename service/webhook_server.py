@@ -114,10 +114,6 @@ class WebhookServer:
         self._registered = False
         logger.info("[BetterGI-Webhook] 路由已注销")
 
-    async def start(self) -> bool:
-        """兼容旧接口，直接返回 True（路由在 register 时已注册）。"""
-        return self._started
-
     async def stop(self) -> None:
         """停止（兼容旧接口）。"""
         self.unregister()

@@ -89,12 +89,12 @@ def run_bettergi(bettergi_dir: str, args: list[str]) -> tuple[bool, str]:
         env.pop("PYTHONPATH", None)
         env.pop("PYTHONHOME", None)
 
-        # 使用 Popen 非阻塞执行
+        # 使用 Popen 非阻塞执行；DEVNULL 避免管道缓冲区填满卡死
         proc = subprocess.Popen(
             cmd,
             cwd=bettergi_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             env=env,
         )
         logging.info("BetterGI 已启动，PID: %d", proc.pid)
@@ -141,8 +141,8 @@ def report_result(
     }
     headers = {}
     if token:
+        # 只走 Authorization 头，避免 token 出现在 URL 中被访问日志记录
         headers["Authorization"] = f"Bearer {token}"
-        url += f"?token={token}"
 
     try:
         with httpx.Client(timeout=10) as client:

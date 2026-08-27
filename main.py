@@ -18,7 +18,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.2.1")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.2.2")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -110,7 +110,6 @@ class BetterGIPlugin(Star):
         self._cmd_log = _get_aliases("log", "日志")
         self._cmd_bind = _get_aliases("bind", "绑定")
         self._cmd_help = _get_aliases("help", "帮助")
-        self._debug = self.config.get("debug_log", False)
 
     def _get_data_dir(self) -> str:
         try:
@@ -133,13 +132,14 @@ class BetterGIPlugin(Star):
             return True
 
         masters = self.config.get("better_master", [])
-        if not masters:
-            logger.debug("[BetterGI-Perm] better_master 为空，用户 %s 放行", sender_id)
-            return True
         if sender_id in [str(m) for m in masters]:
             logger.debug("[BetterGI-Perm] 用户 %s 在 better_master 列表中，放行", sender_id)
             return True
-        logger.warning("[BetterGI-Perm] 用户 %s 无权限", sender_id)
+
+        logger.warning(
+            "[BetterGI-Perm] 用户 %s 无权限（非管理员且不在 better_master 列表）",
+            sender_id,
+        )
         return False
 
     def _get_commands(self) -> list[dict[str, Any]]:
@@ -266,9 +266,6 @@ class BetterGIPlugin(Star):
     @filter.regex('.*', priority=1)
     async def on_message(self, event: AstrMessageEvent):
         """监听所有消息，手动解析自定义命令。"""
-        if not self._check_permission(event):
-            return
-
         msg = event.message_str.strip()
         prefix = self._prefix
 
@@ -279,12 +276,14 @@ class BetterGIPlugin(Star):
         if not sub:
             return
 
-        logger.debug("[BetterGI-Msg] 收到命令: msg='%s', prefix='%s', sub='%s'", msg, prefix, sub)
+        if not self._check_permission(event):
+            return
 
-        event.stop_event()
+        logger.debug("[BetterGI-Msg] 收到命令: msg='%s', prefix='%s', sub='%s'", msg, prefix, sub)
 
         matched = self._match_cmd(sub, self._cmd_run)
         if matched is not None:
+            event.stop_event()
             cmd_arg = sub[len(matched) :].strip()
             logger.debug("[BetterGI-Msg] 匹配到 run: alias='%s', arg='%s'", matched, cmd_arg)
             async for result in self._handle_run(event, cmd_arg):
@@ -293,6 +292,7 @@ class BetterGIPlugin(Star):
 
         matched = self._match_cmd(sub, self._cmd_status)
         if matched is not None:
+            event.stop_event()
             logger.debug("[BetterGI-Msg] 匹配到 status: alias='%s'", matched)
             async for result in self._handle_status(event):
                 yield result
@@ -300,6 +300,7 @@ class BetterGIPlugin(Star):
 
         matched = self._match_cmd(sub, self._cmd_stop)
         if matched is not None:
+            event.stop_event()
             logger.debug("[BetterGI-Msg] 匹配到 stop: alias='%s'", matched)
             async for result in self._handle_stop(event):
                 yield result
@@ -307,6 +308,7 @@ class BetterGIPlugin(Star):
 
         matched = self._match_cmd(sub, self._cmd_log)
         if matched is not None:
+            event.stop_event()
             cmd_arg = sub[len(matched) :].strip()
             logger.debug("[BetterGI-Msg] 匹配到 log: alias='%s', arg='%s'", matched, cmd_arg)
             yield await self._handle_log(event, cmd_arg)
@@ -314,12 +316,14 @@ class BetterGIPlugin(Star):
 
         matched = self._match_cmd(sub, self._cmd_bind)
         if matched is not None:
+            event.stop_event()
             logger.debug("[BetterGI-Msg] 匹配到 bind: alias='%s'", matched)
             yield await self._handle_bind(event)
             return
 
         matched = self._match_cmd(sub, self._cmd_help)
         if matched is not None:
+            event.stop_event()
             logger.debug("[BetterGI-Msg] 匹配到 help: alias='%s'", matched)
             yield event.plain_result(self._build_help_text())
 
@@ -407,7 +411,11 @@ class BetterGIPlugin(Star):
         if stopped:
             yield event.plain_result("✅ BetterGI 任务已停止")
         else:
-            yield event.plain_result("❌ 当前没有正在运行的任务")
+            detail = getattr(self._runner, "last_error", "")
+            if detail:
+                yield event.plain_result(f"❌ 停止失败: {detail}")
+            else:
+                yield event.plain_result("❌ 当前没有正在运行的任务")
 
     async def _handle_status(self, event: AstrMessageEvent):
         status = await self._runner.get_status()
