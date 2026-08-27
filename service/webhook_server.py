@@ -29,7 +29,6 @@ class WebhookServer:
         self._internal_path = (
             f"/{PLUGIN_NAME}/{path.lstrip('/')}" if path else f"/{PLUGIN_NAME}/webhook"
         )
-        self._user_path = path if path.startswith("/") else f"/{path}"
         self._token = token
         self._handler: EventHandler | None = None
         self._started = False

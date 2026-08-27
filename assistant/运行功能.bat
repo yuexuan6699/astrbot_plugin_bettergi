@@ -33,13 +33,15 @@ for /f "delims=" %%i in ('where pythonw 2^>nul') do (
 
 :: ============================================================
 :: 从 config.yaml 读取 astrbot_url 用于连接测试
+:: 注意：URL 含冒号，必须用 tokens=1,* 取冒号后的完整内容
 :: ============================================================
 set "ASTRBOT_URL=http://127.0.0.1:6185"
-for /f "tokens=2 delims=: " %%a in ('findstr /i "^astrbot_url:" "%SCRIPT_DIR%config.yaml" 2^>nul') do (
-    set "ASTRBOT_URL=%%a"
+for /f "tokens=1,* delims=: " %%a in ('findstr /i "^astrbot_url:" "%SCRIPT_DIR%config.yaml" 2^>nul') do (
+    set "ASTRBOT_URL=%%b"
 )
-:: 去除引号
+:: 去除引号和空格
 set "ASTRBOT_URL=%ASTRBOT_URL:"=%"
+set "ASTRBOT_URL=%ASTRBOT_URL: =%"
 
 :menu
 cls

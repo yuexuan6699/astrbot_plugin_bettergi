@@ -170,10 +170,10 @@ class RemoteRunner:
     插件通过 SSE 下发命令，辅助程序执行后通过 POST /result 上报结果。
     """
 
-    def __init__(self, manager, timeout: int = 3600):
+    def __init__(self, manager):
         self._manager = manager  # RemoteConnectionManager
-        self._timeout = timeout
         self._current_command: str = ""
+        self.last_error: str = ""
 
     @property
     def is_running(self) -> bool:
@@ -187,24 +187,29 @@ class RemoteRunner:
     async def run(self, args: list[str]) -> bool:
         """通过辅助程序执行 BetterGI 命令。"""
         if not self._manager.is_connected:
+            self.last_error = "辅助程序未连接，请确认辅助程序已启动"
             logger.error("[BetterGI-Remote] 辅助程序未连接")
             return False
 
         command_str = " ".join(args)
         logger.info("[BetterGI-Remote] 下发命令: %s", command_str)
 
-        success, message = await self._manager.submit_task(args, timeout=self._timeout)
+        # submit_task 只等待启动确认（辅助程序立即返回），默认超时足够
+        success, message = await self._manager.submit_task(args)
         if success:
             self._current_command = command_str
-            logger.info("[BetterGI-Remote] 命令已执行: %s", command_str)
+            self.last_error = ""
+            logger.info("[BetterGI-Remote] 命令已执行: %s (%s)", command_str, message)
         else:
             self._current_command = ""
+            self.last_error = message
             logger.error("[BetterGI-Remote] 命令执行失败: %s", message)
         return success
 
     async def stop(self) -> bool:
         """发送停止指令。"""
         if not self._manager.is_connected:
+            self.last_error = "辅助程序未连接"
             return False
 
         success, message = await self._manager.submit_stop()
@@ -212,6 +217,7 @@ class RemoteRunner:
             self._current_command = ""
             logger.info("[BetterGI-Remote] 已停止: %s", message)
         else:
+            self.last_error = message
             logger.error("[BetterGI-Remote] 停止失败: %s", message)
         return success
 
@@ -232,7 +238,7 @@ class RemoteRunner:
         """检查辅助程序是否已连接。"""
         if self._manager.is_connected:
             return True, "辅助程序已连接"
-        return False, "辅助程序未连接，请确认辅助程序正在运行且地址配置正确"
+        return False, "辅助程序未连接，请确认 BetterGI 电脑上的辅助程序已启动"
 
 
 def create_runner(config: dict, remote_manager=None) -> LocalRunner | RemoteRunner:
@@ -249,10 +255,7 @@ def create_runner(config: dict, remote_manager=None) -> LocalRunner | RemoteRunn
         logger.debug("[BetterGI-Runner] 创建 RemoteRunner（SSE模式）")
         if remote_manager is None:
             raise ValueError("远程模式需要提供 remote_manager")
-        return RemoteRunner(
-            manager=remote_manager,
-            timeout=timeout,
-        )
+        return RemoteRunner(manager=remote_manager)
     else:
         bettergi_dir = config.get("bettergi_dir", "")
         logger.debug(

@@ -165,42 +165,45 @@ def sse_connect(astrbot_url: str, token: str, bettergi_dir: str) -> None:
 
     logging.info("连接 SSE 端点: %s", url)
 
+    # 连接超时 10 秒；读不设超时（SSE 长连接，服务端每 30 秒发心跳）
+    timeout = httpx.Timeout(10.0, read=None)
+
     while True:
         try:
-            with httpx.stream("GET", url, timeout=None) as resp:
+            with httpx.stream("GET", url, timeout=timeout) as resp:
                 if resp.status_code != 200:
-                    logging.error("连接失败: HTTP %d - %s", resp.status_code, resp.text)
-                    time.sleep(5)
-                    continue
+                    logging.error("连接失败: HTTP %d", resp.status_code)
+                else:
+                    logging.info("已连接到 AstrBot，等待指令...")
 
-                logging.info("已连接到 AstrBot，等待指令...")
+                    event_type = ""
+                    data_buffer = ""
 
-                event_type = ""
-                data_buffer = ""
+                    for line in resp.iter_lines():
+                        if not line:
+                            # 空行表示事件结束
+                            if event_type and data_buffer:
+                                _handle_event(
+                                    event_type, data_buffer, bettergi_dir,
+                                    astrbot_url, token,
+                                )
+                            event_type = ""
+                            data_buffer = ""
+                            continue
 
-                for line in resp.iter_lines():
-                    if not line:
-                        # 空行表示事件结束
-                        if event_type and data_buffer:
-                            _handle_event(
-                                event_type, data_buffer, bettergi_dir,
-                                astrbot_url, token,
-                            )
-                        event_type = ""
-                        data_buffer = ""
-                        continue
+                        if line.startswith("event:"):
+                            event_type = line[6:].strip()
+                        elif line.startswith("data:"):
+                            data_buffer += line[5:].strip()
 
-                    if line.startswith("event:"):
-                        event_type = line[6:].strip()
-                    elif line.startswith("data:"):
-                        data_buffer += line[5:].strip()
+                    logging.warning("SSE 连接已断开，5秒后重连...")
 
         except httpx.ConnectError as e:
             logging.error("连接失败: %s，5秒后重试...", e)
-            time.sleep(5)
         except Exception as e:
-            logging.error("连接异常: %s，5秒后重连...", e, exc_info=True)
-            time.sleep(5)
+            logging.error("连接异常: %s，5秒后重连...", e)
+
+        time.sleep(5)
 
 
 def _handle_event(

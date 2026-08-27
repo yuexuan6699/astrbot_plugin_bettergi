@@ -18,7 +18,7 @@ from .service import (
 )
 
 
-@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.2.0")
+@register("bettergi", "BetterGI", "BetterGI 远程控制插件", "2.2.1")
 class BetterGIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -192,8 +192,7 @@ class BetterGIPlugin(Star):
 
             # SSE 连接端点：辅助程序连接上来等待指令
             async def sse_handler():
-                # 令牌验证
-                token = self._remote_manager._token
+                token = self._remote_manager.token
                 if token:
                     query_token = request.query.get("token", "")
                     auth = request.headers.get("Authorization", "")
@@ -208,6 +207,7 @@ class BetterGIPlugin(Star):
                 return stream_response(
                     self._remote_manager.sse_stream(),
                     content_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
 
             self.context.register_web_api(
@@ -219,7 +219,7 @@ class BetterGIPlugin(Star):
 
             # 结果上报端点：辅助程序执行完后上报结果
             async def result_handler():
-                token = self._remote_manager._token
+                token = self._remote_manager.token
                 if token:
                     query_token = request.query.get("token", "")
                     auth = request.headers.get("Authorization", "")
@@ -395,8 +395,9 @@ class BetterGIPlugin(Star):
         success = await self._runner.run(args)
         logger.debug("[BetterGI-Exec] runner.run 返回: %s", success)
         if not success:
-            logger.error("[BetterGI] 命令执行失败: %s", " ".join(args))
-            return False, "命令执行失败，请查看日志"
+            detail = getattr(self._runner, "last_error", "") or "命令执行失败，请查看日志"
+            logger.error("[BetterGI] 命令执行失败: %s (%s)", " ".join(args), detail)
+            return False, detail
         return True, "OK"
 
     async def _handle_stop(self, event: AstrMessageEvent):
@@ -418,6 +419,10 @@ class BetterGIPlugin(Star):
         mode = status.get("mode", "local")
         mode_name = "本地" if mode == "local" else "远程"
         lines.append(f"🔹 运行模式: {mode_name}")
+
+        if mode == "remote":
+            connected = status.get("connected", False)
+            lines.append(f"🔹 辅助程序: {'已连接' if connected else '未连接'}")
 
         is_running = status.get("is_running", False)
         lines.append(f"🔹 运行状态: {'运行中' if is_running else '空闲'}")

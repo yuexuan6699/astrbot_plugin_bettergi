@@ -6,6 +6,8 @@ from collections.abc import AsyncGenerator
 
 from astrbot.api import logger
 
+HEARTBEAT_INTERVAL = 30.0
+
 
 class PendingTask:
     """待执行任务。"""
@@ -29,10 +31,12 @@ class RemoteConnectionManager:
         self._token = token
         self._connected = False
         self._pending_tasks: dict[str, PendingTask] = {}
-        self._current_task: PendingTask | None = None
-        self._lock = asyncio.Lock()
         self._connect_event = asyncio.Event()
         self._command_queue: asyncio.Queue[dict] = asyncio.Queue()
+
+    @property
+    def token(self) -> str:
+        return self._token
 
     @property
     def is_connected(self) -> bool:
@@ -52,7 +56,7 @@ class RemoteConnectionManager:
         """SSE 事件流，供辅助程序连接。"""
         if self._connected:
             logger.warning("[BetterGI-Remote] 已有辅助程序连接，拒绝新连接")
-            yield "event: error\ndata: {\"message\": \"already connected\"}\n\n"
+            yield 'event: error\ndata: {"message": "already connected"}\n\n'
             return
 
         self._connected = True
@@ -60,41 +64,53 @@ class RemoteConnectionManager:
         logger.info("[BetterGI-Remote] 辅助程序已连接")
 
         try:
-            # 发送连接成功事件
-            yield "event: connected\ndata: {\"status\": \"ok\"}\n\n"
+            yield 'event: connected\ndata: {"status": "ok"}\n\n'
 
-            # 持续从队列中取任务并下发
             while True:
-                task = await self._command_queue.get()
+                try:
+                    task = await asyncio.wait_for(
+                        self._command_queue.get(), timeout=HEARTBEAT_INTERVAL
+                    )
+                except asyncio.TimeoutError:
+                    # 心跳注释行，维持连接活跃，客户端会忽略
+                    yield ": ping\n\n"
+                    continue
+
                 data = json.dumps(task, ensure_ascii=False)
                 logger.debug("[BetterGI-Remote] 下发任务: %s", task.get("type"))
                 yield f"event: command\ndata: {data}\n\n"
         except asyncio.CancelledError:
-            logger.info("[BetterGI-Remote] SSE 连接已断开")
+            logger.info("[BetterGI-Remote] SSE 连接已取消")
         except Exception as e:
             logger.error("[BetterGI-Remote] SSE 连接异常: %s", e)
         finally:
+            # 同步清理（不 await，避免生成器关闭过程中的问题）
             self._connected = False
             self._connect_event.clear()
-            # 清理所有未完成的任务
-            async with self._lock:
-                for task in self._pending_tasks.values():
-                    task.error = "连接断开"
-                    task.event.set()
-                self._pending_tasks.clear()
-                self._current_task = None
+            for task in self._pending_tasks.values():
+                task.error = "连接断开"
+                task.event.set()
+            self._pending_tasks.clear()
+            # 丢弃未下发的过期命令，防止重连后执行
+            while not self._command_queue.empty():
+                try:
+                    self._command_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
             logger.info("[BetterGI-Remote] 辅助程序已断开")
 
-    async def submit_task(self, args: list[str], timeout: float = 3600) -> tuple[bool, str]:
-        """提交任务并等待结果。返回 (成功, 消息)。"""
+    async def submit_task(self, args: list[str], timeout: float = 60) -> tuple[bool, str]:
+        """提交任务并等待结果。返回 (成功, 消息)。
+
+        辅助程序启动 BetterGI 后立即上报，通常几秒内返回，
+        timeout 只是兜底（如辅助程序卡死）。
+        """
         if not self._connected:
             return False, "辅助程序未连接"
 
         task_id = str(uuid.uuid4())
         pending = PendingTask(task_id, args)
-
-        async with self._lock:
-            self._pending_tasks[task_id] = pending
+        self._pending_tasks[task_id] = pending
 
         try:
             await self._command_queue.put({
@@ -104,7 +120,6 @@ class RemoteConnectionManager:
                 "timestamp": time.time(),
             })
 
-            # 等待结果
             await asyncio.wait_for(pending.event.wait(), timeout=timeout)
 
             if pending.error:
@@ -116,12 +131,10 @@ class RemoteConnectionManager:
             return False, "未知结果"
 
         except asyncio.TimeoutError:
-            async with self._lock:
-                self._pending_tasks.pop(task_id, None)
-            return False, "任务执行超时"
+            self._pending_tasks.pop(task_id, None)
+            return False, "等待辅助程序响应超时"
         except Exception as e:
-            async with self._lock:
-                self._pending_tasks.pop(task_id, None)
+            self._pending_tasks.pop(task_id, None)
             return False, f"任务执行失败: {e}"
 
     async def handle_result(self, result_data: dict) -> bool:
@@ -134,8 +147,7 @@ class RemoteConnectionManager:
             task_id, success,
         )
 
-        async with self._lock:
-            pending = self._pending_tasks.pop(task_id, None)
+        pending = self._pending_tasks.pop(task_id, None)
 
         if not pending:
             logger.warning("[BetterGI-Remote] 收到未知任务的结果: %s", task_id)
@@ -152,9 +164,7 @@ class RemoteConnectionManager:
 
         task_id = f"stop_{int(time.time())}"
         pending = PendingTask(task_id, [])
-
-        async with self._lock:
-            self._pending_tasks[task_id] = pending
+        self._pending_tasks[task_id] = pending
 
         try:
             await self._command_queue.put({
@@ -169,14 +179,5 @@ class RemoteConnectionManager:
                 return False, pending.error
             return True, "已停止"
         except asyncio.TimeoutError:
-            async with self._lock:
-                self._pending_tasks.pop(task_id, None)
+            self._pending_tasks.pop(task_id, None)
             return False, "停止超时"
-
-    async def get_status(self) -> dict:
-        """获取远程状态（通过 ping 或直接返回连接状态）。"""
-        if not self._connected:
-            return {"mode": "remote", "is_running": False, "error": "未连接"}
-
-        # 简单返回连接状态，详细状态可以通过额外的 ping 命令获取
-        return {"mode": "remote", "is_running": False, "connected": True}
